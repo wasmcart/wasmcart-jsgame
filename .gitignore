@@ -1,0 +1,11 @@
+# Build intermediates
+obj/
+
+# Large .wasc builds (pack from jsgames/ source)
+examples/space/*.wasc
+examples/adventure-ai/*.wasc
+
+# OS/editor
+.DS_Store
+*.swp
+*~
