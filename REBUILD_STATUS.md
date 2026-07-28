@@ -164,3 +164,55 @@ place to start, since only Canvas 2D carts are affected -- `hello_audio` and
 
 The productive next step is probably an emscripten build with `-fsanitize=address`
 (ASAN works under wasm and would name the write), not more flag bisection.
+
+
+## ASAN named the crash site (2026-07-28)
+
+An `-fsanitize=address` build with `-g` did not produce a sanitizer *report*
+-- the fault is a raw wasm trap inside Skia, which is a prebuilt archive and so
+was never instrumented. But the debug symbols gave the exact call chain, which
+is what mattered:
+
+```
+skiac_font_collection::skiac_font_collection()   <- crashes here
+  <- skiac_font_collection_create
+  <- ensure_skia_init
+  <- js_clearRect                                <- first Canvas 2D call
+```
+
+So it is not a draw call at all. It is **lazy Skia init on the first Canvas 2D
+operation**, which is why every earlier per-primitive bisection gave nonsense:
+whichever draw happened first paid for the init, and everything else looked
+innocent.
+
+**Prime suspect, from reading the constructor** (`wasmcart-skia/out/include/skia_c.hpp`):
+
+```cpp
+font_mgr(SkFontMgr_New_Custom_Directory(SK_FONT_FILE_PREFIX))
+```
+
+`SK_FONT_FILE_PREFIX` has branches for Windows, Apple and `__linux__` -- and
+**none for wasm**, so a cart compiles to `/usr/share/fonts/`, a host path that
+does not exist inside the sandbox. Same class of bug as retroemu's
+GET_SYSTEM_DIRECTORY: a host path is meaningless in wasm.
+
+### Attempted and NOT sufficient
+
+Two fixes were tried and neither made plain `-O2` pass:
+
+1. `#define SK_FONT_FILE_PREFIX ""` for wasm -- still crashes (an empty prefix
+   still enters the directory scanner).
+2. `font_mgr(SkFontMgr_New_Custom_Empty())` on wasm -- still crashes.
+
+So the font path is very likely *a* bug, but something else in that constructor
+is also unhappy. The remaining members are worth checking in order:
+`sk_make_sp<FontCollection>()`, `TypefaceFontProviderCustom(font_mgr)`,
+`SkFontMgr_New_Custom_Empty()` for the default manager, and
+`enableFontFallback()` -- fallback with no fonts registered is a plausible
+next suspect.
+
+**To reproduce the diagnosis:** `bash build-asan.sh` (committed), pack
+hello_canvas against `build/cart-asan.wasm`, and read the stack. That is the
+whole reason to keep that script.
+
+`-sASSERTIONS=1` remains in `build.sh` as the working mitigation.
