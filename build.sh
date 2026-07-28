@@ -136,7 +136,10 @@ emcc -O2 \
     \
     -sALLOW_MEMORY_GROWTH=1 \
     -sINITIAL_MEMORY=268435456 \
-    -sMAXIMUM_MEMORY=1073741824 \
+    `# 2GB, not 1GB: space decodes 21MB of .ogg to f32 PCM (~25x expansion),` \
+    `# which blew a 1GB ceiling during load with a bare "memory access out of` \
+    `# bounds". Bisected file-by-file: 7 music files loaded, the 8th did not.` \
+    -sMAXIMUM_MEMORY=2147483648 \
     -sERROR_ON_UNDEFINED_SYMBOLS=0 \
     -sTOTAL_STACK=8388608 \
     `# was TOTAL_STACK, renamed in emscripten 3.1.27 and silently ignored since` \

@@ -296,3 +296,36 @@ game (renders 1 colour, "passes" every count-based check). The real sources are
 in the `jsgames` repo, and they must be packed from the game's ROOT, not its
 `dist/`: packing `adventure-ai/dist` gave 1 colour, packing `adventure-ai/` gave
 233 and a correct loading screen.
+
+
+## space / space3d: it was the memory ceiling, not the games
+
+Both crashed during load with `memory access out of bounds`. Not a rendering
+bug and not a regression -- the SHIPPED carts (old runtime) failed identically.
+
+Bisected by stripping the game to nothing and adding assets back:
+
+```
+js only (60KB)            OK
+js + public/ (33MB)       OK
+js + music/  (21MB)       CRASH
+  2 ogg files (5.5MB)     OK
+  4 ogg files (10.8MB)    OK
+  7 ogg files (16.1MB)    OK
+  8 ogg files (20.9MB)    CRASH
+```
+
+21MB of Vorbis decoded to f32 PCM is roughly 25x, ~500MB, and the cart was
+linked with `-sMAXIMUM_MEMORY=1073741824`. Raising it to 2GB fixes both:
+space renders 500 colours (clouds, ship, "Score: 100 / Max: 100 / Level: 1"),
+space3d renders 35.
+
+The failure gives no hint that memory is the issue -- `ALLOW_MEMORY_GROWTH`
+just fails the growth request and the next write traps. Worth remembering for
+any cart that loads a lot of compressed audio.
+
+### Packing gotcha, again
+
+`jsgames/space` is 171MB because of `node_modules`. Packing the game root
+sweeps it all in -- 1421 files, a 150MB cart. Exclude `node_modules`, `dist`
+and `package-lock.json`; the real game is 41 files.
