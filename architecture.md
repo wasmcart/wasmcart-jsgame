@@ -527,13 +527,25 @@ bounded -- `cart_main.c` caps microtask draining at `MAX_JOB_MS` per frame -- bu
 that bound cannot see a synchronous loop, because control never returns to the
 job queue at all.
 
-The mitigation QuickJS provides is `JS_SetInterruptHandler`, which is **not
-currently used**. Wiring it to a per-frame deadline would let the runtime abort
-a game that overruns instead of taking the host down. Until then:
+**Mitigated as of 2026-07-28.** `cart_main.c` installs a
+`JS_SetInterruptHandler` watchdog, armed at the top of every `wc_render` with a
+`FRAME_WATCHDOG_MS` (2000ms) deadline. QuickJS calls the handler periodically
+from its interpreter loop -- including from inside a `while(true){}` -- so a
+runaway frame is interrupted, `JS_Call` returns an exception, and the host keeps
+running.
 
-> A malicious cart cannot read your files, reach the network, or escape the
-> sandbox -- but it CAN freeze the process running it. Treat "safe to run
-> untrusted games" as a statement about your data, not about your uptime.
+Verified: the three-line cart above returns after 2001ms instead of hanging,
+and the following three frames complete in 1ms total.
+
+The budget is deliberately loose. It is a runaway detector, not a frame-time
+enforcer: a game legitimately doing heavy work in one frame (level generation,
+asset decoding) must not be killed for it. threejs, hello_webgl and hello_audio
+all run 60 frames without the watchdog firing. It re-arms every frame, so one
+pathological frame does not penalise the rest of the session.
+
+> Residual caveat: a cart CAN still burn up to 2 seconds per frame before being
+> interrupted, so a hostile cart can make the host stutter badly even though it
+> can no longer freeze it outright.
 
 ### Why wasmcart-jsgame is more secure than a browser
 

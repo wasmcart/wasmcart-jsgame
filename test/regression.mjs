@@ -144,6 +144,33 @@ if (!existsSync(join(ROOT, 'build/cart.wasm'))) {
   }
 }
 
+/* ── 6. Frame watchdog (cart_main.c JS_SetInterruptHandler) ──────────────────
+ * `while(true){}` used to hang wc_render, and the host with it, forever. The
+ * microtask bound cannot catch it: a synchronous loop never returns to the job
+ * queue. QuickJS's interrupt handler can, because the interpreter calls it. */
+{
+  const { mkdirSync, writeFileSync } = await import('node:fs');
+  const d = join(tmp, 'busy');
+  mkdirSync(d, { recursive: true });
+  writeFileSync(join(d, 'main.js'),
+    `function loop(){ while(true){} }\nrequestAnimationFrame(loop);\n`);
+  const wasc = pack(d, join(tmp, 'busy.wasc'), 'b');
+  const { gl } = createWebGL2Context(320, 240);
+  const host = new CartHost({});
+  await host.load(readFileSync(wasc), { glBackend: gl, width: 320, height: 240 });
+  const t0 = Date.now();
+  host.runFrame([]);
+  const spent = Date.now() - t0;
+  // Budget is 2000ms. Anything under ~5s means it fired; a REGRESSION to no
+  // handler at all would never return and this line would never run.
+  ok('infinite loop is interrupted', spent < 5000, `frame returned after ${spent}ms`);
+  // And the host must still be usable afterwards, not left wedged.
+  const t1 = Date.now();
+  for (let i = 0; i < 3; i++) host.runFrame([]);
+  ok('host survives an interrupted frame', Date.now() - t1 < 1000,
+     `3 more frames in ${Date.now() - t1}ms`);
+}
+
 rmSync(tmp, { recursive: true, force: true });
 console.log(`\n${pass} passed, ${fail} failed${skip ? `, ${skip} skipped` : ''}`);
 process.exit(fail ? 1 : 0);

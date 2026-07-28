@@ -119,6 +119,7 @@ static uint8_t prev_pointer_buttons[10];
 char *load_asset_string(const char *path, int *out_len);
 static void pump_timers(void);
 static void pump_raf(void);
+static int frame_watchdog(JSRuntime *rt, void *opaque);
 static void dispatch_input_events(void);
 static void fire_key_event(const char *type, uint8_t hid);
 static void fire_mouse_event(const char *type, int16_t x, int16_t y, uint8_t button);
@@ -206,6 +207,7 @@ void wc_init(void) {
         return;
     }
     JS_SetMemoryLimit(rt, 256 * 1024 * 1024);  /* 256 MB */
+    JS_SetInterruptHandler(rt, frame_watchdog, NULL);
     JS_SetMaxStackSize(rt, 1024 * 1024);         /* 1 MB stack */
 
     ctx = JS_NewContext(rt);
@@ -395,6 +397,48 @@ void wc_init(void) {
 #define MAX_JOB_MS         4      /* ~25% of a 60fps frame -- VERIFIED controlling: setting this to 1 gives 1ms/frame, 4 gives 4ms */
 #define MAX_JOBS_PER_FRAME 4096   /* backstop if the clock never moves */
 
+/*
+ * Frame watchdog.
+ *
+ * The sandbox stops a cart reading your files or reaching the network, but
+ * NOT this:
+ *
+ *     function loop(){ while(true){} }  requestAnimationFrame(loop);
+ *
+ * Three lines, and wc_render never returns -- the host hangs with it. The
+ * microtask bound below cannot catch it, because a synchronous loop never
+ * returns control to the job queue at all. QuickJS's interrupt handler is
+ * called periodically from the interpreter loop, which is the only place that
+ * CAN see it.
+ *
+ * Budget is deliberately loose. A game legitimately doing heavy work in one
+ * frame (level generation, decoding) should not be killed, so this is a
+ * runaway detector, not a frame-time enforcer: it fires only when a single
+ * wc_render has been running long enough that the host is visibly wedged.
+ *
+ * When it fires, JS_Call returns an exception, wc_render logs it and returns
+ * normally, and the host keeps running. The cart is left alive -- the next
+ * frame gets a fresh budget -- so a game with one pathological frame recovers
+ * rather than being permanently killed.
+ */
+#define FRAME_WATCHDOG_MS 2000
+
+static double frame_deadline_ms;   /* 0 = disarmed */
+
+/* Non-zero return = interrupt the running JS. Called periodically by the
+ * QuickJS interpreter loop, including from inside a `while(true){}`. */
+static int frame_watchdog(JSRuntime *rt, void *opaque) {
+    (void)rt; (void)opaque;
+    if (frame_deadline_ms == 0) return 0;          /* not inside a frame */
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0;
+    double now = (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1000000.0;
+    if (now < frame_deadline_ms) return 0;
+    frame_deadline_ms = 0;                          /* fire once per frame */
+    WC_LOG("frame watchdog: JS ran over budget, interrupting");
+    return 1;
+}
+
 static double job_now_ms(void) {
     struct timespec ts;
     if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0;
@@ -409,6 +453,10 @@ extern void skia_save_host_fbo(void);
 void wc_render(void) {
     if (!initialized)
         return;
+
+    /* Arm the watchdog for this frame. Re-armed every frame, so a game that
+     * overruns once is not penalised afterwards. */
+    frame_deadline_ms = job_now_ms() + FRAME_WATCHDOG_MS;
 
     /* Save the host's FBO before any Ganesh operations. */
     skia_save_host_fbo();
