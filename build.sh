@@ -131,14 +131,23 @@ if [ -f obj/emstubs.o ]; then
     OBJS="$OBJS obj/emstubs.o"
 fi
 
-emcc -O2 \
+# -sASSERTIONS=1 is LOAD-BEARING, not a debug leftover. Without it a -O2 build
+# faults with "memory access out of bounds" on frame 0 of any cart that draws a
+# second fillRect alongside arc/strokeRect/fillText -- hello_canvas, for one.
+# Bisected: -O2 alone crashes, -O2 -sASSERTIONS=1 does not, and it is neither
+# the link level (-O1 link still crashes) nor the stack (16MB still crashes).
+# That pattern -- behaviour changing with optimisation -- means undefined
+# behaviour somewhere in the C/C++ that ASSERTIONS happens to mask. The real
+# bug is NOT fixed; this keeps the tree buildable while it is hunted.
+emcc -O2 -sASSERTIONS=1 \
     -sSTANDALONE_WASM=1 \
     \
     -sALLOW_MEMORY_GROWTH=1 \
     -sINITIAL_MEMORY=268435456 \
     -sMAXIMUM_MEMORY=1073741824 \
     -sERROR_ON_UNDEFINED_SYMBOLS=0 \
-    -sTOTAL_STACK=8388608 \
+    -sSTACK_SIZE=8388608 \
+    `# was TOTAL_STACK, renamed in emscripten 3.1.27 and silently ignored since` \
     --no-entry \
     -sEXPORTED_FUNCTIONS='["_wc_get_info","_wc_init","_wc_render"]' \
     $OBJS \

@@ -268,7 +268,8 @@ float skiac_wasm_draw_text(void* canvas_ptr, void* paint_ptr,
         if (bitmap && x1 > 0 && y1 > 0) {
             /* Convert alpha bitmap to RGBA premultiplied for Skia */
             int bw = x1, bh = y1;
-            uint8_t *rgba = (uint8_t *)malloc(bw * bh * 4);
+            uint8_t *rgba = (uint8_t *)malloc((size_t)bw * bh * 4);
+            if (!rgba) { stbtt_FreeBitmap(bitmap, nullptr); continue; }
             for (int p = 0; p < bw * bh; p++) {
                 uint8_t a = bitmap[p];
                 /* Premultiplied alpha */
