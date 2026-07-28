@@ -1,6 +1,11 @@
 # Build intermediates
 obj/
 
+# ASAN/debug cart builds -- 18MB artifacts from build-asan.sh, reproducible
+# in one command and useless to anyone else.
+build/cart-asan.wasm
+build/*-asan.wasm
+
 # Large .wasc builds (pack from jsgames/ source)
 examples/space/*.wasc
 examples/adventure-ai/*.wasc
