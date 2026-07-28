@@ -146,7 +146,7 @@ emcc -O2 -sASSERTIONS=1 \
     -sINITIAL_MEMORY=268435456 \
     -sMAXIMUM_MEMORY=1073741824 \
     -sERROR_ON_UNDEFINED_SYMBOLS=0 \
-    -sSTACK_SIZE=8388608 \
+    -sTOTAL_STACK=8388608 \
     `# was TOTAL_STACK, renamed in emscripten 3.1.27 and silently ignored since` \
     --no-entry \
     -sEXPORTED_FUNCTIONS='["_wc_get_info","_wc_init","_wc_render"]' \

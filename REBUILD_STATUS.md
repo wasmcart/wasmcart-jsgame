@@ -132,3 +132,35 @@ path does not contain them either — that is a full Skia checkout with no stb.
 They are now vendored in `src/` (v1.26, byte-identical to every other wasmcart
 repo). Without them a clean checkout cannot compile at all, which means the
 committed binary was built on a machine where they existed somewhere else.
+
+
+## Hunting the UB behind `-sASSERTIONS=1` (2026-07-28)
+
+Narrowed a long way, not caught. What is now established:
+
+- **It is a build flag, not source.** With every source fix in place, the
+  pristine `build.sh` crashes and the modified one passes.
+- **The flag rename is NOT the cause.** Changing only `TOTAL_STACK` ->
+  `STACK_SIZE` still crashes. (It is still worth fixing -- `TOTAL_STACK` has
+  been silently ignored since emscripten 3.1.27 -- but it is not this bug.)
+- **Stack SIZE is not the variable.** 4 MB, 8 MB, 12 MB, 16 MB and 32 MB all
+  behave the same once `-sASSERTIONS=1` is present, and 32 MB alone (no
+  assertions) also passes -- which is what a stack overflow would look like,
+  except that 4 MB *with* assertions passes too. Both cannot be true of a
+  simple overflow, so size is a red herring.
+- **`-sSTACK_OVERFLOW_CHECK=1` alone fixes it** -- and that is the strongest
+  clue. It reserves a cookie at the top of the stack and checks writes to
+  address zero, which SHIFTS THE MEMORY LAYOUT. A bug that disappears when
+  layout shifts is an out-of-bounds write landing somewhere harmless rather
+  than a genuine overflow.
+- `-sSAFE_HEAP=1` and `-sCHECK_NULL_WRITES=1` do NOT fix it, and
+  `-sSTACK_OVERFLOW_CHECK=2` fails during `load` instead, so neither gives a
+  clean diagnostic.
+
+**Where to look next:** something writes just past a buffer, and the cookie
+reservation moves the target out of harm's way. The Skia/Ganesh path is the
+place to start, since only Canvas 2D carts are affected -- `hello_audio` and
+`hello_fetch` pass in every configuration.
+
+The productive next step is probably an emscripten build with `-fsanitize=address`
+(ASAN works under wasm and would name the write), not more flag bisection.
