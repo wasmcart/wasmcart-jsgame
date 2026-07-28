@@ -462,6 +462,51 @@ requestAnimationFrame(loop);
      wk === 'load:,recv:3,recv:10', wk || '(no output)');
 }
 
+/* ── 16. arcTo exposed, and roundRect draws real geometry ───────────────────
+ * arcTo was registered natively in canvas2d_skia.c but never exposed on the JS
+ * context, so ctx.arcTo was undefined for every cart -- and roundRect (which
+ * needs it) did not exist at all. Samples three pixels: a filled centre proves
+ * it drew, a BLACK corner proves the corners were actually rounded rather than
+ * a plain rect, and a filled top edge proves it is not just a small box. */
+{
+  const { mkdirSync, writeFileSync } = await import('node:fs');
+  const d = join(tmp, 'roundrect');
+  mkdirSync(d, { recursive: true });
+  writeFileSync(join(d, 'main.js'), `
+const c=document.getElementById('game'); c.width=64; c.height=64;
+const ctx=c.getContext('2d');
+let n=0;
+function loop(){
+  ctx.fillStyle='#000000'; ctx.fillRect(0,0,64,64);
+  if(++n===20 && !globalThis.p){ globalThis.p=1;
+    let out;
+    try {
+      ctx.fillStyle='#ff0000';
+      ctx.beginPath(); ctx.roundRect(8,8,48,48,16); ctx.fill();
+      const d=ctx.getImageData(0,0,64,64).data;
+      const at=(x,y)=>{const i=(y*64+x)*4; return d[i]+','+d[i+1]+','+d[i+2];};
+      out = at(32,32)+' '+at(9,9)+' '+at(32,9);
+    } catch(e){ out = 'THREW:'+e.message; }
+    console.log('RR ' + (typeof ctx.arcTo) + ' ' + out);
+  }
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+`);
+  const wasc = pack(d, join(tmp, 'roundrect.wasc'), 'rr');
+  const { gl } = createWebGL2Context(64, 64);
+  const host = new CartHost({});
+  const cap = [];
+  const real = console.error;
+  console.error = (...a) => cap.push(a.join(' '));
+  await host.load(readFileSync(wasc), { glBackend: gl, width: 64, height: 64 });
+  for (let i = 0; i < 30; i++) host.runFrame([]);
+  console.error = real;
+  const rr = (cap.find((l) => l.includes('RR ')) ?? '').replace(/^.*RR /, '').trim();
+  ok('arcTo exposed, roundRect rounds corners',
+     rr === 'function 255,0,0 0,0,0 255,0,0', rr || '(no output)');
+}
+
 rmSync(tmp, { recursive: true, force: true });
 console.log(`\n${pass} passed, ${fail} failed${skip ? `, ${skip} skipped` : ''}`);
 process.exit(fail ? 1 : 0);
