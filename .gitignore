@@ -4,6 +4,11 @@ obj/
 # Large .wasc builds (pack from jsgames/ source)
 examples/space/*.wasc
 examples/adventure-ai/*.wasc
+examples/space3d/*.wasc
+
+# Host runtime logs written next to a cart when it runs
+wasmcart.log
+**/wasmcart.log
 
 # OS/editor
 .DS_Store

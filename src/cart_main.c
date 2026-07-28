@@ -249,12 +249,13 @@ void wc_init(void) {
 
     /* Set window/canvas dimensions from actual resolution */
     {
-        char dim_js[256];
+        char dim_js[512];
         snprintf(dim_js, sizeof(dim_js),
             "globalThis.window.innerWidth = %u;"
             "globalThis.window.innerHeight = %u;"
-            "if (document.body) { document.body.clientWidth = %u; document.body.clientHeight = %u; }",
-            cur_width, cur_height, cur_width, cur_height);
+            "if (document.body) { document.body.clientWidth = %u; document.body.clientHeight = %u; }"
+            "if (document._canvas) { document._canvas.width = %u; document._canvas.height = %u; }",
+            cur_width, cur_height, cur_width, cur_height, cur_width, cur_height);
         JS_Eval(ctx, dim_js, strlen(dim_js), "<dims>", JS_EVAL_TYPE_GLOBAL);
     }
 
@@ -378,9 +379,27 @@ void wc_init(void) {
 /* ── wc_render ───────────────────────────────────────────────────── */
 
 __attribute__((export_name("wc_render")))
+extern void skia_save_host_fbo(void);
+
 void wc_render(void) {
     if (!initialized)
         return;
+
+    /* Save the host's FBO before any Ganesh operations. */
+    skia_save_host_fbo();
+
+    /* Enable GL tracing on frame 5 to capture one full game frame */
+    {
+        static int frame = 0;
+        frame++;
+        if (frame == 5) {
+            extern void gl_trace_start(void);
+            gl_trace_start();
+        } else if (frame == 7) {
+            extern void gl_trace_stop(void);
+            gl_trace_stop();
+        }
+    }
 
     /* Execute pending jobs (Promise microtasks) */
     JSContext *pctx;
@@ -635,9 +654,10 @@ static JSValue js_set_resolution(JSContext *c, JSValueConst this_val,
     JS_ToInt32(c, &w, argv[0]);
     JS_ToInt32(c, &h, argv[1]);
     if (w > 0 && w <= MAX_WIDTH && h > 0 && h <= MAX_HEIGHT) {
-        /* Don't change cur_width/cur_height or info — those stay at preferred resolution.
-         * Just tell Skia to apply a scale transform so game coordinates map to full surface.
-         * This is equivalent to CSS scaling a <canvas> element in a browser. */
+        cur_width = w;
+        cur_height = h;
+        info.width = w;
+        info.height = h;
         skia_resize_surface(w, h);
     }
     return JS_UNDEFINED;
@@ -864,6 +884,8 @@ static JSValue js_get_gamepads(JSContext *ctx, JSValueConst this_val,
         JS_SetPropertyStr(ctx, pad, "connected", JS_TRUE);
         JS_SetPropertyStr(ctx, pad, "id",
             JS_NewString(ctx, "wasmcart Gamepad"));
+        JS_SetPropertyStr(ctx, pad, "mapping",
+            JS_NewString(ctx, "standard"));
 
         /* Buttons array — 16 standard gamepad buttons */
         JSValue buttons = JS_NewArray(ctx);
@@ -1084,11 +1106,13 @@ static void register_canvas_api(JSContext *ctx) {
         "  set width(v) {\n"
         "    this._width = v;\n"
         "    if (this._isMain && typeof _wcSetResolution === 'function') _wcSetResolution(v, this._height);\n"
+        "    if (this._glctx) { this._glctx.drawingBufferWidth = v; }\n"
         "  }\n"
         "  get height() { return this._height; }\n"
         "  set height(v) {\n"
         "    this._height = v;\n"
         "    if (this._isMain && typeof _wcSetResolution === 'function') _wcSetResolution(this._width, v);\n"
+        "    if (this._glctx) { this._glctx.drawingBufferHeight = v; }\n"
         "  }\n"
         "  getContext(type) {\n"
         "    if (type === '2d') {\n"

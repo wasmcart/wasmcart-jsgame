@@ -240,12 +240,65 @@ static uint8_t cur_stroke_r = 0, cur_stroke_g = 0, cur_stroke_b = 0, cur_stroke_
 /* ── Initialization ──────────────────────────────────────────────── */
 
 static int using_gl_surface = 0;
+static int _host_fbo = 0; /* FBO the host had bound before Ganesh init */
+
+#ifdef __wasm__
+__attribute__((import_module("gl"), import_name("glGetIntegerv")))
+extern void _gl_GetIntegerv(unsigned int pname, int *data);
+#endif
 extern int game_uses_webgl;
+
+void skia_save_host_fbo(void) {
+    int fbo = 0;
+    _gl_GetIntegerv(0x8CA6, &fbo); /* GL_DRAW_FRAMEBUFFER_BINDING */
+    if (fbo != _host_fbo) {
+        _host_fbo = fbo;
+        static int logged = 0;
+        if (!logged) {
+            logged = 1;
+            char msg[64];
+            snprintf(msg, sizeof(msg), "Host FBO per-frame: %d", _host_fbo);
+            wc_log(msg, strlen(msg));
+        }
+    }
+}
 
 /* Per-op Ganesh flush with no CPU sync — fast submit to GPU.
  * Needed because Ganesh drops batched commands without intermediate flushes. */
+extern int _skia_is_desktop_context(void);
+
+#ifdef __wasm__
+__attribute__((import_module("gl"), import_name("glGetError")))
+extern unsigned int _gl_GetError2(void);
+#endif
+
 static inline void ganesh_flush_if_needed(void) {
-    if (using_gl_surface) skia_gl_flush_nosync();
+    if (!using_gl_surface) return;
+    static int logged = 0;
+    int desktop = _skia_is_desktop_context();
+    if (!logged) {
+        logged = 1;
+        char msg[64];
+        snprintf(msg, sizeof(msg), "Ganesh per-op flush: desktop=%d (using %s)", desktop, desktop ? "kYes" : "kNo");
+        wc_log(msg, strlen(msg));
+    }
+    if (desktop) {
+        skia_gl_flush_nosync();
+    } else {
+        skia_gl_flush_nosync();
+    }
+
+    /* Log GL errors on desktop to diagnose rendering issues */
+    if (desktop) {
+        static int err_count = 0;
+        unsigned int err = _gl_GetError2();
+        if (err && err_count < 10) {
+            err_count++;
+            char msg[64];
+            snprintf(msg, sizeof(msg), "Ganesh GL error after flush: 0x%04x", err);
+            wc_log(msg, strlen(msg));
+        }
+    }
 }
 
 /* Resize Skia surface when game changes canvas dimensions */
@@ -322,6 +375,14 @@ static void ensure_skia_init(void) {
     }
     skia_canvas = skiac_surface_get_canvas(skia_surface);
 
+    if (using_gl_surface) {
+        WC_LOG("Canvas 2D: GPU (Skia Ganesh GL)");
+    } else {
+        WC_LOG("Canvas 2D: CPU (Skia raster + GL blit)");
+    }
+
+    /* Host FBO saved per-frame in skia_save_host_fbo() */
+
     fill_paint = skiac_paint_create();
     skiac_paint_set_anti_alias(fill_paint, using_gl_surface ? 0 : 1);
     skiac_paint_set_style(fill_paint, 0);  /* 0 = fill */
@@ -379,8 +440,9 @@ static void ensure_skia_init(void) {
 
 /* GL imports for texture upload + fullscreen quad + FBO blit */
 #ifdef __wasm__
-__attribute__((import_module("gl"), import_name("glGetIntegerv")))
-extern void _gl_GetIntegerv(unsigned int pname, int *data);
+/* _gl_GetIntegerv declared earlier (before ensure_skia_init) */
+__attribute__((import_module("gl"), import_name("glReadPixels")))
+extern void _gl_ReadPixels(int x, int y, int w, int h, unsigned int format, unsigned int type, void *pixels);
 __attribute__((import_module("gl"), import_name("glBlitFramebuffer")))
 extern void _gl_BlitFramebuffer(int sx0, int sy0, int sx1, int sy1,
                                  int dx0, int dy0, int dx1, int dy1,
@@ -509,6 +571,9 @@ static void init_blit(void) {
     blit_initialized = 1;
 }
 
+extern void gl_trace_frame_start(int frame);
+extern void gl_trace_frame_end(void);
+
 void skia_flush_to_framebuffer(void) {
     if (!skia_initialized) return;
     if (game_uses_webgl) return; /* WebGL renders directly — no Ganesh blit */
@@ -520,21 +585,87 @@ void skia_flush_to_framebuffer(void) {
         /* Get Ganesh's current FBO (where it just rendered) */
         int ganesh_fbo = 0;
         _gl_GetIntegerv(0x8CA6, &ganesh_fbo); /* GL_DRAW_FRAMEBUFFER_BINDING */
+        {
+            static int logged = 0;
+            if (!logged) {
+                logged = 1;
+                char msg[64];
+                snprintf(msg, sizeof(msg), "Ganesh blit: FBO=%d size=%dx%d", ganesh_fbo, cur_width, cur_height);
+                wc_log(msg, strlen(msg));
+            }
+        }
 
-        /* Direct GPU blit: Ganesh FBO → host display FBO (0 = host redirect) */
-        _gl_BindFramebuffer(0x8CA8, ganesh_fbo); /* GL_READ_FRAMEBUFFER = Ganesh */
-        _gl_BindFramebuffer(0x8CA9, 0);          /* GL_DRAW_FRAMEBUFFER = host (FBO 0 redirect) */
-        _gl_Disable(0x0C11); /* GL_SCISSOR_TEST */
-        _gl_BlitFramebuffer(
-            0, cur_height, cur_width, 0,   /* src rect flipped Y (Skia top-down → GL bottom-up) */
-            0, 0, cur_width, cur_height,   /* dst rect (host FBO) */
-            0x4000,  /* GL_COLOR_BUFFER_BIT */
-            0x2600   /* GL_NEAREST */
-        );
+        /* Y-orientation check: read top, center, bottom of Ganesh FBO */
+        {
+            static int check_count = 0;
+            check_count++;
+            if (check_count == 60) {
+                unsigned char px[4];
+                char msg[256];
 
-        /* Rebind Ganesh's FBO for next frame's draws */
-        _gl_BindFramebuffer(0x8D40, ganesh_fbo); /* GL_FRAMEBUFFER */
-        skia_gl_reset_context();
+                _gl_ReadPixels(cur_width/2, 10, 1, 1, 0x1908, 0x1401, px);
+                snprintf(msg, sizeof(msg), "Ganesh FBO GL-bottom(y=10): R=%d G=%d B=%d", px[0], px[1], px[2]);
+                wc_log(msg, strlen(msg));
+
+                _gl_ReadPixels(cur_width/2, cur_height/2, 1, 1, 0x1908, 0x1401, px);
+                snprintf(msg, sizeof(msg), "Ganesh FBO GL-center(y=%d): R=%d G=%d B=%d", cur_height/2, px[0], px[1], px[2]);
+                wc_log(msg, strlen(msg));
+
+                _gl_ReadPixels(cur_width/2, cur_height-10, 1, 1, 0x1908, 0x1401, px);
+                snprintf(msg, sizeof(msg), "Ganesh FBO GL-top(y=%d): R=%d G=%d B=%d", cur_height-10, px[0], px[1], px[2]);
+                wc_log(msg, strlen(msg));
+
+                /* After readback+upload, check redirect FBO */
+                _gl_BindFramebuffer(0x8CA8, 0); /* READ from FBO 0 (redirect) */
+                _gl_ReadPixels(cur_width/2, 10, 1, 1, 0x1908, 0x1401, px);
+                snprintf(msg, sizeof(msg), "Redirect FBO GL-bottom(y=10): R=%d G=%d B=%d", px[0], px[1], px[2]);
+                wc_log(msg, strlen(msg));
+
+                _gl_ReadPixels(cur_width/2, cur_height-10, 1, 1, 0x1908, 0x1401, px);
+                snprintf(msg, sizeof(msg), "Redirect FBO GL-top(y=%d): R=%d G=%d B=%d", cur_height-10, px[0], px[1], px[2]);
+                wc_log(msg, strlen(msg));
+            }
+        }
+
+        if (_skia_is_desktop_context()) {
+            /* Desktop: readback + texture upload to avoid self-blit.
+             * Use raw glReadPixels (not Ganesh's readPixels which uses stubbed functions). */
+            static uint8_t *rb_buf = NULL;
+            if (!rb_buf) rb_buf = (uint8_t*)malloc(cur_width * cur_height * 4);
+            if (rb_buf) {
+                /* Ensure Ganesh's FBO is bound for readback */
+                _gl_BindFramebuffer(0x8D40, ganesh_fbo);
+                _gl_ReadPixels(0, 0, cur_width, cur_height, 0x1908, 0x1401, rb_buf);
+                skia_gl_reset_context();
+
+                if (!blit_initialized) init_blit();
+                if (blit_initialized) {
+                    _gl_BindFramebuffer(0x8D40, 0);
+                    _gl_Viewport(0, 0, cur_width, cur_height);
+                    _gl_Disable(0x0B71);
+                    _gl_Disable(0x0BE2);
+                    _gl_BindTexture(0x0DE1, blit_tex);
+                    _gl_TexImage2D(0x0DE1, 0, 0x1908, cur_width, cur_height, 0,
+                                    0x1908, 0x1401, rb_buf);
+                    _gl_UseProgram(blit_program);
+                    _gl_Uniform1i(_gl_GetUniformLocation(blit_program, "uTex"), 0);
+                    _gl_BindVertexArray(blit_vao);
+                    _gl_DrawArrays(5, 0, 4);
+                }
+            }
+            skia_gl_reset_context();
+        } else {
+            /* GLES: direct FBO blit */
+            _gl_BindFramebuffer(0x8CA8, ganesh_fbo);
+            _gl_BindFramebuffer(0x8CA9, 0);
+            _gl_Disable(0x0C11);
+            _gl_BlitFramebuffer(
+                0, cur_height, cur_width, 0,
+                0, 0, cur_width, cur_height,
+                0x4000, 0x2600);
+            _gl_BindFramebuffer(0x8D40, ganesh_fbo);
+            skia_gl_reset_context();
+        }
         return;
     }
 
@@ -548,7 +679,7 @@ void skia_flush_to_framebuffer(void) {
     if (!blit_initialized) return;
 
     /* Upload Skia RGBA pixels as GL texture */
-    _gl_BindFramebuffer(0x8D40, 0); /* bind default framebuffer */
+    _gl_BindFramebuffer(0x8D40, 0); /* bind display FBO (host redirects 0) */
     _gl_Viewport(0, 0, cur_width, cur_height);
     _gl_Disable(0x0B71); /* depth test off */
     _gl_Disable(0x0BE2); /* blending off */

@@ -47,6 +47,26 @@ Host swapBuffers → screen
 
 WebGL games set `game_uses_webgl = 1` which skips Ganesh entirely.
 
+### Desktop GL Core 3.3 (RetroArch)
+
+On RetroArch's Core 3.3 context, two cart-side workarounds are needed:
+
+1. **VAO 0 redirect**: Core Profile doesn't allow VAO 0. Ganesh's GLES path
+   uses VAO 0 as the default. `wc_gl_get_proc` intercepts `glBindVertexArray(0)`
+   and redirects to a real VAO created via `glGenVertexArrays`.
+
+2. **GLES interface on desktop**: Ganesh uses `GrGLMakeAssembledGLESInterface`
+   even on Core 3.3. Mesa accepts `#version 300 es` shaders via
+   `GL_ARB_ES3_compatibility`. The desktop GL interface
+   (`GrGLMakeAssembledGLInterface`) requires too many desktop-only function
+   stubs and produces the same rendering output.
+
+3. **Extension hiding**: `ganesh_glGetString(GL_EXTENSIONS)` returns empty,
+   `ganesh_glGetIntegerv(GL_NUM_EXTENSIONS)` returns 0. Prevents Ganesh from
+   probing for extension function pointers not in the WASM import table.
+
+These workarounds are transparent — the same `.wasc` file works on all hosts.
+
 ## Ganesh GL Setup
 
 ### The Problem

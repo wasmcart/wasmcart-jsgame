@@ -100,6 +100,18 @@ _GL_IMPORT_EXTRA(glGetQueryiv)    extern void glGetQueryiv(GLenum target, GLenum
 _GL_IMPORT_EXTRA(glInvalidateSubFramebuffer) extern void glInvalidateSubFramebuffer(GLenum target, GLsizei numAttachments, const GLenum* attachments, GLint x, GLint y, GLsizei width, GLsizei height);
 _GL_IMPORT_EXTRA(glGetShaderPrecisionFormat) extern void glGetShaderPrecisionFormat(GLenum shadertype, GLenum precisiontype, GLint* range, GLint* precision);
 
+/* Desktop GL functions (Core 3.3 — needed for GrGLMakeAssembledGLInterface) */
+_GL_IMPORT_EXTRA(glDrawBuffer)     extern void glDrawBuffer(GLenum buf);
+_GL_IMPORT_EXTRA(glPolygonMode)    extern void glPolygonMode(GLenum face, GLenum mode);
+_GL_IMPORT_EXTRA(glGetTexLevelParameteriv) extern void glGetTexLevelParameteriv(GLenum target, GLint level, GLenum pname, GLint* params);
+_GL_IMPORT_EXTRA(glTexBuffer)      extern void glTexBuffer(GLenum target, GLenum internalformat, GLuint buffer);
+_GL_IMPORT_EXTRA(glMapBuffer)      extern void* glMapBuffer(GLenum target, GLenum access);
+_GL_IMPORT_EXTRA(glBindFragDataLocation) extern void glBindFragDataLocation(GLuint program, GLuint color, const char* name);
+_GL_IMPORT_EXTRA(glGetMultisamplefv) extern void glGetMultisamplefv(GLenum pname, GLuint index, GLfloat* val);
+_GL_IMPORT_EXTRA(glTexBufferRange) extern void glTexBufferRange(GLenum target, GLenum internalformat, GLuint buffer, GLintptr offset, GLsizeiptr size);
+_GL_IMPORT_EXTRA(glPatchParameteri) extern void glPatchParameteri(GLenum pname, GLint value);
+_GL_IMPORT_EXTRA(glMemoryBarrier)  extern void glMemoryBarrier(GLbitfield barriers);
+
 /* ── Static wrapper functions ────────────────────────────────────── */
 /* Each wraps a WASM GL import so it has a proper function table entry */
 
@@ -132,6 +144,17 @@ typedef unsigned char GLboolean_;
 typedef unsigned int GLbitfield_;
 typedef signed long GLsizeiptr_;
 typedef signed long GLintptr_;
+
+/* Logging helper — available throughout the file */
+__attribute__((import_module("env"), import_name("wc_log")))
+extern void _wc_log_fn(const char *msg, unsigned int len);
+static void _log(const char *m) { unsigned int l=0; while(m[l])l++; _wc_log_fn(m,l); }
+
+#include "gl_trace.h"
+
+/* Desktop GL detection (set during Ganesh init, used by shader patching) */
+static bool _is_desktop_context = false;
+static bool _use_desktop_gl = false;
 
 /* State */
 V1(glEnable, GLenum_)
@@ -189,8 +212,18 @@ V2(glGenTextures, GLsizei_, GLuint_*)
 V2(glDeleteTextures, GLsizei_, const GLuint_*)
 V2(glBindTexture, GLenum_, GLuint_)
 V1(glActiveTexture, GLenum_)
-V9(glTexImage2D, GLenum_, GLint_, GLint_, GLsizei_, GLsizei_, GLint_, GLenum_, GLenum_, const void*)
-V9(glTexSubImage2D, GLenum_, GLint_, GLint_, GLint_, GLsizei_, GLsizei_, GLenum_, GLenum_, const void*)
+static void w_glTexImage2D(GLenum_ t, GLint_ l, GLint_ i, GLsizei_ w, GLsizei_ h,
+                            GLint_ b, GLenum_ f, GLenum_ ty, const void* p) {
+    GL_TRACE("glTexImage2D(0x%x, %d, 0x%x, %d, %d, %d, 0x%x, 0x%x, %s)",
+             t, l, i, w, h, b, f, ty, p ? "data" : "NULL");
+    glTexImage2D(t, l, i, w, h, b, f, ty, p);
+}
+static void w_glTexSubImage2D(GLenum_ t, GLint_ l, GLint_ x, GLint_ y,
+                               GLsizei_ w, GLsizei_ h, GLenum_ f, GLenum_ ty, const void* p) {
+    GL_TRACE("glTexSubImage2D(0x%x, %d, %d, %d, %d, %d, 0x%x, 0x%x, %s)",
+             t, l, x, y, w, h, f, ty, p ? "data" : "NULL");
+    glTexSubImage2D(t, l, x, y, w, h, f, ty, p);
+}
 V3(glTexParameteri, GLenum_, GLenum_, GLint_)
 V1(glGenerateMipmap, GLenum_)
 
@@ -198,7 +231,27 @@ V1(glGenerateMipmap, GLenum_)
 W1(GLuint_, glCreateShader, GLenum_)
 V1(glDeleteShader, GLuint_)
 V4(glShaderSource, GLuint_, GLsizei_, const char* const*, const GLint_*)
-V1(glCompileShader, GLuint_)
+/* _log already defined at file scope above */
+
+static void w_glCompileShader(GLuint_ shader) {
+    glCompileShader(shader);
+    if (_is_desktop_context) {
+        GLint_ status = 0;
+        glGetShaderiv(shader, 0x8B81, &status); /* GL_COMPILE_STATUS */
+        if (!status) {
+            static int fail_count = 0;
+            fail_count++;
+            if (fail_count <= 3) {
+                char log[512] = {0};
+                GLsizei_ len = 0;
+                glGetShaderInfoLog(shader, sizeof(log)-1, &len, log);
+                char msg[640];
+                snprintf(msg, sizeof(msg), "Ganesh: shader compile FAILED: %.500s", log);
+                _log(msg);
+            }
+        }
+    }
+}
 V3(glGetShaderiv, GLuint_, GLenum_, GLint_*)
 V4(glGetShaderInfoLog, GLuint_, GLsizei_, GLsizei_*, char*)
 
@@ -207,7 +260,31 @@ W0(GLuint_, glCreateProgram)
 V1(glDeleteProgram, GLuint_)
 V2(glAttachShader, GLuint_, GLuint_)
 V2(glDetachShader, GLuint_, GLuint_)
-V1(glLinkProgram, GLuint_)
+static void w_glLinkProgram(GLuint_ program) {
+    glLinkProgram(program);
+    if (_is_desktop_context) {
+        GLint_ status = 0;
+        glGetProgramiv(program, 0x8B82, &status); /* GL_LINK_STATUS */
+        if (!status) {
+            static int fail_count = 0;
+            fail_count++;
+            if (fail_count <= 3) {
+                char log[512] = {0};
+                GLsizei_ len = 0;
+                glGetProgramInfoLog(program, sizeof(log)-1, &len, log);
+                char msg[640];
+                snprintf(msg, sizeof(msg), "Ganesh: program link FAILED: %.500s", log);
+                _log(msg);
+            }
+        } else {
+            static int link_ok = 0;
+            link_ok++;
+            if (link_ok <= 5) {
+                _log("Ganesh: program linked OK");
+            }
+        }
+    }
+}
 V1(glUseProgram, GLuint_)
 V3(glGetProgramiv, GLuint_, GLenum_, GLint_*)
 V4(glGetProgramInfoLog, GLuint_, GLsizei_, GLsizei_*, char*)
@@ -364,6 +441,61 @@ V3(glGetQueryiv, GLenum_, GLenum_, GLint_*)
 static void w_glInvalidateSubFramebuffer(GLenum_ t, GLsizei_ n, const GLenum_* a, GLint_ x, GLint_ y, GLsizei_ w, GLsizei_ h) { glInvalidateSubFramebuffer(t,n,a,x,y,w,h); }
 V4(glGetShaderPrecisionFormat, GLenum_, GLenum_, GLint_*, GLint_*)
 
+/* Shader source patching — convert GLES shaders to desktop GL when on Core context.
+ * Ganesh with GLES interface generates #version 300 es shaders. These compile on
+ * Core 3.3 (via GL_ARB_ES3_compatibility) but may not produce correct output.
+ * Patch to #version 330 and strip precision qualifiers. */
+static char _shader_patch_buf[16384];
+
+static void w_glShaderSource_patched(GLuint_ shader, GLsizei_ count,
+                                      const char* const* strings, const GLint_* lengths) {
+    if (!_is_desktop_context) {
+        glShaderSource(shader, count, strings, lengths);
+        return;
+    }
+
+    /* Concatenate all source strings */
+    int total = 0;
+    for (int i = 0; i < count; i++) {
+        int len = (lengths && lengths[i] > 0) ? lengths[i] : strlen(strings[i]);
+        if (total + len < (int)sizeof(_shader_patch_buf) - 1) {
+            memcpy(_shader_patch_buf + total, strings[i], len);
+            total += len;
+        }
+    }
+    _shader_patch_buf[total] = 0;
+
+    /* Don't patch #version 300 es → 330. Mesa Core 3.3 accepts ES shaders
+     * natively via GL_ARB_ES3_compatibility. Patching causes more problems
+     * (missing layout qualifiers, precision differences) than it solves.
+     * Only strip extensions that Core 3.3 doesn't support as ES extensions. */
+    {
+        char *p;
+        while ((p = strstr(_shader_patch_buf, "#extension GL_OES_standard_derivatives")) != NULL) {
+            /* Blank the entire #extension line */
+            char *end = strchr(p, '\n');
+            if (end) memset(p, ' ', end - p);
+            else memset(p, ' ', strlen(p));
+        }
+    }
+
+    const char *patched = _shader_patch_buf;
+    int patched_len = total;
+    glShaderSource(shader, 1, &patched, &patched_len);
+}
+
+/* Desktop GL wrappers (Core 3.3) */
+V1(glDrawBuffer, GLenum_)
+V2(glPolygonMode, GLenum_, GLenum_)
+V4(glGetTexLevelParameteriv, GLenum_, GLint_, GLenum_, GLint_*)
+V3(glTexBuffer, GLenum_, GLenum_, GLuint_)
+static void* w_glMapBuffer(GLenum_ t, GLenum_ a) { return glMapBuffer(t, a); }
+V3(glBindFragDataLocation, GLuint_, GLuint_, const char*)
+V3(glGetMultisamplefv, GLenum_, GLuint_, GLfloat_*)
+V5(glTexBufferRange, GLenum_, GLenum_, GLuint_, GLintptr_, GLsizeiptr_)
+V2(glPatchParameteri, GLenum_, GLint_)
+V1(glMemoryBarrier, GLbitfield_)
+
 extern "C" {
 
 /* wc_log import */
@@ -378,44 +510,154 @@ static void gl_log(const char *msg) {
 static GrDirectContext* s_grContext = nullptr;
 static SkSurface* s_glSurface = nullptr;
 
+/* Detect desktop GL vs GLES from GL_SHADING_LANGUAGE_VERSION (host passes through real) */
+static bool is_desktop_gl_context() {
+    const char* glsl_ver = (const char*)glGetString(0x8B8C); /* GL_SHADING_LANGUAGE_VERSION */
+    if (!glsl_ver) return false;
+    /* GLES versions contain "ES" — desktop versions don't */
+    return (strstr(glsl_ver, "ES") == nullptr);
+}
+
+/* Ganesh extension filtering + GL version override.
+ * Reports zero extensions so Ganesh only uses core functions.
+ * Overrides GL_VERSION to match actual context type (ES 3.0 or GL 3.3). */
+static const unsigned char* ganesh_glGetString(GLenum_ name) {
+    if (name == 0x1F02) { /* GL_VERSION */
+        if (_use_desktop_gl) {
+            static const unsigned char ver[] = "3.3.0 wasmcart";
+            return ver;
+        } else {
+            static const unsigned char ver[] = "OpenGL ES 3.0 wasmcart";
+            return ver;
+        }
+    }
+    if (name == 0x8B8C) { /* GL_SHADING_LANGUAGE_VERSION */
+        if (_use_desktop_gl) {
+            static const unsigned char ver[] = "3.30";
+            return ver;
+        } else {
+            static const unsigned char ver[] = "OpenGL ES GLSL ES 3.00";
+            return ver;
+        }
+    }
+    if (name == 0x1F03) { /* GL_EXTENSIONS */
+        static const unsigned char empty[] = "";
+        return empty;
+    }
+    return glGetString(name);
+}
+
+static const unsigned char* ganesh_glGetStringi(GLenum_ name, GLuint_ index) {
+    if (name == 0x1F03) return nullptr; /* GL_EXTENSIONS — none */
+    return glGetStringi(name, index);
+}
+
+static void ganesh_glGetIntegerv(GLenum_ pname, GLint_* data) {
+    if (pname == 0x821D) { *data = 0; return; } /* GL_NUM_EXTENSIONS */
+    /* GL_CONTEXT_PROFILE_MASK (0x9126) — pass through to real GL */
+    glGetIntegerv(pname, data);
+}
+
+/* Traced GL wrappers — log function name + key args when tracing is active */
+static void w_traced_glBindFramebuffer(GLenum_ t, GLuint_ f) {
+    GL_TRACE("glBindFramebuffer(0x%x, %d)", t, f); glBindFramebuffer(t, f); }
+static void w_traced_glBindTexture(GLenum_ t, GLuint_ tex) {
+    GL_TRACE("glBindTexture(0x%x, %d)", t, tex); glBindTexture(t, tex); }
+static void w_traced_glActiveTexture(GLenum_ u) {
+    GL_TRACE("glActiveTexture(0x%x)", u); glActiveTexture(u); }
+static void w_traced_glUseProgram(GLuint_ p) {
+    GL_TRACE("glUseProgram(%d)", p); glUseProgram(p); }
+/* On Core 3.3, VAO 0 is invalid. Create a default VAO and redirect VAO 0 to it. */
+static GLuint_ _default_vao = 0;
+static void w_traced_glBindVertexArray(GLuint_ v) {
+    if (v == 0 && _is_desktop_context) {
+        if (!_default_vao) {
+            glGenVertexArrays(1, &_default_vao);
+            _log("Ganesh: created default VAO for Core 3.3");
+        }
+        v = _default_vao;
+    }
+    GL_TRACE("glBindVertexArray(%d)", v); glBindVertexArray(v); }
+static void w_traced_glDrawArrays(GLenum_ m, GLint_ f, GLsizei_ c) {
+    GL_TRACE("glDrawArrays(0x%x, %d, %d)", m, f, c); glDrawArrays(m, f, c); }
+static void w_traced_glDrawElements(GLenum_ m, GLsizei_ c, GLenum_ t, const void* i) {
+    GL_TRACE("glDrawElements(0x%x, %d, 0x%x, %p)", m, c, t, i); glDrawElements(m, c, t, i); }
+static void w_traced_glEnable(GLenum_ c) {
+    GL_TRACE("glEnable(0x%x)", c); glEnable(c); }
+static void w_traced_glDisable(GLenum_ c) {
+    GL_TRACE("glDisable(0x%x)", c); glDisable(c); }
+static void w_traced_glViewport(GLint_ x, GLint_ y, GLsizei_ w, GLsizei_ h) {
+    GL_TRACE("glViewport(%d, %d, %d, %d)", x, y, w, h); glViewport(x, y, w, h); }
+static void w_traced_glScissor(GLint_ x, GLint_ y, GLsizei_ w, GLsizei_ h) {
+    GL_TRACE("glScissor(%d, %d, %d, %d)", x, y, w, h); glScissor(x, y, w, h); }
+static void w_traced_glBindBuffer(GLenum_ t, GLuint_ b) {
+    GL_TRACE("glBindBuffer(0x%x, %d)", t, b); glBindBuffer(t, b); }
+static void w_traced_glBlendFunc(GLenum_ s, GLenum_ d) {
+    GL_TRACE("glBlendFunc(0x%x, 0x%x)", s, d); glBlendFunc(s, d); }
+static void w_traced_glClear(GLbitfield_ m) {
+    GL_TRACE("glClear(0x%x)", m); glClear(m); }
+static void w_traced_glClearColor(GLfloat_ r, GLfloat_ g, GLfloat_ b, GLfloat_ a) {
+    GL_TRACE("glClearColor(%.2f, %.2f, %.2f, %.2f)", r, g, b, a); glClearColor(r, g, b, a); }
+static void w_traced_glColorMask(GLboolean_ r, GLboolean_ g, GLboolean_ b, GLboolean_ a) {
+    GL_TRACE("glColorMask(%d,%d,%d,%d)", r, g, b, a); glColorMask(r, g, b, a); }
+static void w_traced_glDepthMask(GLboolean_ f) {
+    GL_TRACE("glDepthMask(%d)", f); glDepthMask(f); }
+static void w_traced_glStencilFunc(GLenum_ f, GLint_ r, GLuint_ m) {
+    GL_TRACE("glStencilFunc(0x%x, %d, 0x%x)", f, r, m); glStencilFunc(f, r, m); }
+static void w_traced_glStencilOp(GLenum_ sf, GLenum_ df, GLenum_ dp) {
+    GL_TRACE("glStencilOp(0x%x, 0x%x, 0x%x)", sf, df, dp); glStencilOp(sf, df, dp); }
+static void w_traced_glStencilMask(GLuint_ m) {
+    GL_TRACE("glStencilMask(0x%x)", m); glStencilMask(m); }
+static void w_traced_glPixelStorei(GLenum_ p, GLint_ v) {
+    GL_TRACE("glPixelStorei(0x%x, %d)", p, v); glPixelStorei(p, v); }
+
 static GrGLFuncPtr wc_gl_get_proc(void* ctx, const char name[]) {
     #define MAP(fn) if (strcmp(name, #fn) == 0) return (GrGLFuncPtr)w_##fn
+    #define TMAP(fn) if (strcmp(name, #fn) == 0) return (GrGLFuncPtr)w_traced_##fn
 
-    MAP(glActiveTexture); MAP(glAttachShader); MAP(glBindBuffer);
-    MAP(glBindFramebuffer); MAP(glBindRenderbuffer); MAP(glBindTexture);
-    MAP(glBindVertexArray); MAP(glBlendColor); MAP(glBlendEquation);
-    MAP(glBlendEquationSeparate); MAP(glBlendFunc); MAP(glBlendFuncSeparate);
+    /* Traced versions of draw-critical functions */
+    TMAP(glActiveTexture); MAP(glAttachShader); TMAP(glBindBuffer);
+    TMAP(glBindFramebuffer); MAP(glBindRenderbuffer); TMAP(glBindTexture);
+    TMAP(glBindVertexArray); MAP(glBlendColor); MAP(glBlendEquation);
+    MAP(glBlendEquationSeparate); TMAP(glBlendFunc); MAP(glBlendFuncSeparate);
     MAP(glBufferData); MAP(glBufferSubData); MAP(glCheckFramebufferStatus);
-    MAP(glClear); MAP(glClearColor); MAP(glClearStencil);
-    MAP(glColorMask); MAP(glCompileShader); MAP(glCreateProgram);
+    TMAP(glClear); TMAP(glClearColor); MAP(glClearStencil);
+    TMAP(glColorMask);
+    if (strcmp(name, "glCompileShader") == 0) return (GrGLFuncPtr)w_glCompileShader;
+    MAP(glCreateProgram);
     MAP(glCreateShader); MAP(glCullFace); MAP(glDeleteBuffers);
     MAP(glDeleteFramebuffers); MAP(glDeleteProgram); MAP(glDeleteRenderbuffers);
     MAP(glDeleteShader); MAP(glDeleteTextures); MAP(glDeleteVertexArrays);
-    MAP(glDepthFunc); MAP(glDepthMask); MAP(glDepthRangef);
-    MAP(glDisable); MAP(glDisableVertexAttribArray); MAP(glDrawArrays);
-    MAP(glDrawElements); MAP(glEnable); MAP(glEnableVertexAttribArray);
+    MAP(glDepthFunc); TMAP(glDepthMask); MAP(glDepthRangef);
+    TMAP(glDisable); MAP(glDisableVertexAttribArray); TMAP(glDrawArrays);
+    TMAP(glDrawElements); TMAP(glEnable); MAP(glEnableVertexAttribArray);
     MAP(glFinish); MAP(glFlush); MAP(glFramebufferRenderbuffer);
     MAP(glFramebufferTexture2D); MAP(glFrontFace); MAP(glGenBuffers);
     MAP(glGenFramebuffers); MAP(glGenRenderbuffers); MAP(glGenTextures);
     MAP(glGenVertexArrays); MAP(glGenerateMipmap); MAP(glGetError);
-    MAP(glGetIntegerv); MAP(glGetProgramInfoLog); MAP(glGetProgramiv);
-    MAP(glGetShaderInfoLog); MAP(glGetShaderiv); MAP(glGetString);
+    /* glGetIntegerv/glGetString/glGetStringi intercepted to filter extensions */
+    if (strcmp(name, "glGetIntegerv") == 0) return (GrGLFuncPtr)ganesh_glGetIntegerv;
+    if (strcmp(name, "glGetString") == 0) return (GrGLFuncPtr)ganesh_glGetString;
+    MAP(glGetProgramInfoLog); MAP(glGetProgramiv);
+    MAP(glGetShaderInfoLog); MAP(glGetShaderiv);
     MAP(glGetUniformLocation); MAP(glGetAttribLocation);
     MAP(glGetActiveAttrib); MAP(glGetActiveUniform);
-    MAP(glHint); MAP(glLineWidth); MAP(glLinkProgram);
-    MAP(glPixelStorei); MAP(glPolygonOffset); MAP(glReadPixels);
-    MAP(glRenderbufferStorage); MAP(glScissor); MAP(glShaderSource);
-    MAP(glStencilFunc); MAP(glStencilFuncSeparate);
+    MAP(glHint); MAP(glLineWidth);
+    if (strcmp(name, "glLinkProgram") == 0) return (GrGLFuncPtr)w_glLinkProgram;
+    TMAP(glPixelStorei); MAP(glPolygonOffset); MAP(glReadPixels);
+    MAP(glRenderbufferStorage); TMAP(glScissor);
+    if (strcmp(name, "glShaderSource") == 0) return (GrGLFuncPtr)w_glShaderSource_patched;
+    TMAP(glStencilFunc); MAP(glStencilFuncSeparate);
     MAP(glStencilMask); MAP(glStencilMaskSeparate);
-    MAP(glStencilOp); MAP(glStencilOpSeparate);
+    TMAP(glStencilOp); MAP(glStencilOpSeparate);
     MAP(glTexImage2D); MAP(glTexParameteri); MAP(glTexSubImage2D);
     MAP(glUniform1f); MAP(glUniform1i);
     MAP(glUniform2f); MAP(glUniform3f); MAP(glUniform4f);
     MAP(glUniform1fv); MAP(glUniform1iv);
     MAP(glUniform2fv); MAP(glUniform3fv); MAP(glUniform4fv);
     MAP(glUniformMatrix2fv); MAP(glUniformMatrix3fv); MAP(glUniformMatrix4fv);
-    MAP(glUseProgram); MAP(glValidateProgram);
-    MAP(glVertexAttribPointer); MAP(glViewport);
+    TMAP(glUseProgram); MAP(glValidateProgram);
+    MAP(glVertexAttribPointer); TMAP(glViewport);
     MAP(glBindAttribLocation); MAP(glClearDepthf);
     MAP(glBindBufferBase); MAP(glBindBufferRange);
     MAP(glGetUniformBlockIndex); MAP(glUniformBlockBinding);
@@ -423,9 +665,27 @@ static GrGLFuncPtr wc_gl_get_proc(void* ctx, const char name[]) {
     MAP(glDetachShader);
 
     /* Ganesh-required extras */
-    MAP(glGetStringi); MAP(glIsEnabled);
+    if (strcmp(name, "glGetStringi") == 0) return (GrGLFuncPtr)ganesh_glGetStringi;
+    MAP(glIsEnabled);
     MAP(glGetBooleanv); MAP(glGetFloatv);
-    MAP(glMapBufferRange); MAP(glUnmapBuffer); MAP(glFlushMappedBufferRange);
+    /* On desktop GL, provide MapBuffer stubs that always return NULL.
+     * This forces Ganesh to fall back to glTexSubImage2D for uploads
+     * instead of using mapped buffers (which may not work through WASM). */
+    if (_is_desktop_context) {
+        if (strcmp(name, "glMapBufferRange") == 0) {
+            static void* (*fn)(unsigned int, long, long, unsigned int) =
+                [](unsigned int, long, long, unsigned int) -> void* { return nullptr; };
+            return (GrGLFuncPtr)fn;
+        }
+        if (strcmp(name, "glMapBuffer") == 0) {
+            static void* (*fn)(unsigned int, unsigned int) =
+                [](unsigned int, unsigned int) -> void* { return nullptr; };
+            return (GrGLFuncPtr)fn;
+        }
+    } else {
+        MAP(glMapBufferRange);
+    }
+    MAP(glUnmapBuffer); MAP(glFlushMappedBufferRange);
     MAP(glRenderbufferStorageMultisample);
     MAP(glDrawArraysInstanced); MAP(glDrawElementsInstanced); MAP(glVertexAttribDivisor);
     MAP(glBlitFramebuffer); MAP(glInvalidateFramebuffer);
@@ -443,11 +703,95 @@ static GrGLFuncPtr wc_gl_get_proc(void* ctx, const char name[]) {
     MAP(glGetFramebufferAttachmentParameteriv); MAP(glGetRenderbufferParameteriv);
     MAP(glCopyBufferSubData); MAP(glIsSync); MAP(glWaitSync);
     MAP(glGetInternalformativ); MAP(glGetProgramBinary); MAP(glProgramBinary); MAP(glProgramParameteri);
-    MAP(glBindSampler); MAP(glDeleteSamplers); MAP(glGenSamplers);
+    /* Sampler objects — instrument on desktop to debug texture binding */
+    if (strcmp(name, "glGenSamplers") == 0) {
+        static void (*fn)(GLsizei_, GLuint_*) = [](GLsizei_ n, GLuint_* ids) {
+            glGenSamplers(n, ids);
+            if (_is_desktop_context && n > 0) {
+                char msg[64]; snprintf(msg, sizeof(msg), "Ganesh: glGenSamplers(%d) → id=%d", n, ids[0]);
+                _log(msg);
+            }
+        };
+        return (GrGLFuncPtr)fn;
+    }
+    if (strcmp(name, "glBindSampler") == 0) {
+        static void (*fn)(GLuint_, GLuint_) = [](GLuint_ unit, GLuint_ sampler) {
+            glBindSampler(unit, sampler);
+            if (_is_desktop_context) {
+                static int c = 0;
+                if (c++ < 5) { char msg[64]; snprintf(msg, sizeof(msg), "Ganesh: glBindSampler(unit=%d, sampler=%d)", unit, sampler); _log(msg); }
+            }
+        };
+        return (GrGLFuncPtr)fn;
+    }
+    MAP(glDeleteSamplers);
     MAP(glSamplerParameterf); MAP(glSamplerParameteri); MAP(glSamplerParameteriv);
     MAP(glBeginQuery); MAP(glDeleteQueries); MAP(glEndQuery); MAP(glGenQueries);
     MAP(glGetQueryObjectuiv); MAP(glGetQueryiv);
     MAP(glInvalidateSubFramebuffer); MAP(glGetShaderPrecisionFormat);
+
+    /* Desktop GL (Core 3.3) */
+    MAP(glDrawBuffer); MAP(glPolygonMode); MAP(glGetTexLevelParameteriv);
+    MAP(glTexBuffer); MAP(glMapBuffer); MAP(glBindFragDataLocation);
+    MAP(glGetMultisamplefv); MAP(glTexBufferRange);
+    MAP(glPatchParameteri); MAP(glMemoryBarrier);
+
+    /* Desktop GL stubs — correctly typed no-ops for functions Ganesh's desktop
+     * interface builder requires but we don't need for ES 3.0 rendering.
+     * WASM enforces strict function signature matching — generic stubs crash. */
+    if (_is_desktop_context) {
+        #define STUB_V0(n) if(strcmp(name,#n)==0){static void(*f)()=[](){};return(GrGLFuncPtr)f;}
+        #define STUB_V1(n,t1) if(strcmp(name,#n)==0){static void(*f)(t1)=[](t1){};return(GrGLFuncPtr)f;}
+        #define STUB_V2(n,t1,t2) if(strcmp(name,#n)==0){static void(*f)(t1,t2)=[](t1,t2){};return(GrGLFuncPtr)f;}
+        #define STUB_V3(n,t1,t2,t3) if(strcmp(name,#n)==0){static void(*f)(t1,t2,t3)=[](t1,t2,t3){};return(GrGLFuncPtr)f;}
+        #define STUB_V4(n,t1,t2,t3,t4) if(strcmp(name,#n)==0){static void(*f)(t1,t2,t3,t4)=[](t1,t2,t3,t4){};return(GrGLFuncPtr)f;}
+        #define STUB_V5(n,t1,t2,t3,t4,t5) if(strcmp(name,#n)==0){static void(*f)(t1,t2,t3,t4,t5)=[](t1,t2,t3,t4,t5){};return(GrGLFuncPtr)f;}
+        #define STUB_R(n,r,...) if(strcmp(name,#n)==0){static r(*f)(__VA_ARGS__)=[](__VA_ARGS__)->r{return(r)0;};return(GrGLFuncPtr)f;}
+
+        /* Draw indirect */
+        STUB_V2(glDrawArraysIndirect, unsigned int, const void*)
+        STUB_V2(glDrawElementsIndirect, unsigned int, const void*)
+        STUB_V4(glDrawArraysInstancedBaseInstance, unsigned int, int, int, int)
+        STUB_V5(glDrawElementsInstancedBaseVertexBaseInstance, unsigned int, int, unsigned int, const void*, int)
+        STUB_V4(glMultiDrawArraysIndirect, unsigned int, const void*, int, int)
+        STUB_V4(glMultiDrawElementsIndirect, unsigned int, const void*, int, int)
+
+        /* Fragment data */
+        STUB_V3(glBindFragDataLocationIndexed, unsigned int, unsigned int, unsigned int)
+
+        /* Texture clear/invalidate */
+        STUB_V5(glClearTexImage, unsigned int, int, unsigned int, unsigned int, const void*)
+        if(strcmp(name,"glClearTexSubImage")==0){static void(*f)(unsigned int,int,int,int,int,int,int,int,unsigned int,unsigned int,const void*)=[](unsigned int,int,int,int,int,int,int,int,unsigned int,unsigned int,const void*){};return(GrGLFuncPtr)f;}
+        STUB_V1(glInvalidateTexImage, unsigned int)
+        STUB_V5(glInvalidateTexSubImage, unsigned int, int, int, int, int)
+        STUB_V1(glInvalidateBufferData, unsigned int)
+        STUB_V3(glInvalidateBufferSubData, unsigned int, long, long)
+
+        /* Debug */
+        STUB_V2(glDebugMessageCallback, void*, const void*)
+        STUB_V5(glDebugMessageControl, unsigned int, unsigned int, unsigned int, int, const unsigned int*)
+        STUB_V5(glDebugMessageInsert, unsigned int, unsigned int, unsigned int, unsigned int, int)
+        STUB_R(glGetDebugMessageLog, unsigned int, unsigned int, int, unsigned int*, unsigned int*, unsigned int*, unsigned int*, int*, char*)
+        STUB_V4(glObjectLabel, unsigned int, unsigned int, int, const char*)
+        STUB_V3(glPushDebugGroup, unsigned int, unsigned int, int)
+        STUB_V0(glPopDebugGroup)
+
+        /* Query */
+        STUB_V2(glQueryCounter, unsigned int, unsigned int)
+        STUB_V3(glGetQueryObjecti64v, unsigned int, unsigned int, long long*)
+        STUB_V3(glGetQueryObjectui64v, unsigned int, unsigned int, unsigned long long*)
+
+        /* Texture barrier */
+        STUB_V0(glTextureBarrier)
+
+        #undef STUB_V0
+        #undef STUB_V1
+        #undef STUB_V2
+        #undef STUB_V3
+        #undef STUB_V4
+        #undef STUB_V5
+        #undef STUB_R
+    }
 
     /* EGL stubs — Ganesh optionally queries EGL */
     if (strcmp(name, "eglQueryString") == 0) {
@@ -475,11 +819,35 @@ static GrGLFuncPtr wc_gl_get_proc(void* ctx, const char name[]) {
 void* skia_create_gl_surface(int width, int height) {
     gl_log("Ganesh: SkGraphics::Init...");
     SkGraphics::Init();
-    gl_log("Ganesh: Init done, assembling GL interface...");
+    gl_log("Ganesh: Init done, detecting GL context type...");
 
-    auto interface = GrGLMakeAssembledGLESInterface(nullptr, wc_gl_get_proc);
+    _is_desktop_context = is_desktop_gl_context();
+    _use_desktop_gl = _is_desktop_context;
+
+    sk_sp<const GrGLInterface> interface;
+    if (_use_desktop_gl) {
+        /* Use GLES interface even on desktop GL. Ganesh's desktop GL rendering
+         * path has incompatibilities with our function stubs that cause textured
+         * draws to silently fail. The GLES interface generates shaders and state
+         * that work on desktop GL via GL_ARB_ES3_compatibility.
+         * We still detect desktop context for the readback/blit path. */
+        gl_log("Ganesh: Core context detected, trying GLES interface on desktop...");
+        _use_desktop_gl = false;
+        interface = GrGLMakeAssembledGLESInterface(nullptr, wc_gl_get_proc);
+        if (interface) {
+            gl_log("Ganesh: GLES interface on desktop OK!");
+        } else {
+            gl_log("Ganesh: GLES interface failed on desktop, trying desktop interface...");
+            _use_desktop_gl = true;
+            interface = GrGLMakeAssembledGLInterface(nullptr, wc_gl_get_proc);
+            gl_log(interface ? "Ganesh: desktop interface OK" : "Ganesh: desktop interface NULL");
+        }
+    } else {
+        gl_log("Ganesh: using GLES interface");
+        interface = GrGLMakeAssembledGLESInterface(nullptr, wc_gl_get_proc);
+    }
     if (!interface) {
-        gl_log("Ganesh: GrGLMakeAssembledGLESInterface returned null");
+        gl_log("Ganesh: interface assembly returned null");
         return nullptr;
     }
     gl_log("Ganesh: GL interface assembled, creating context...");
@@ -543,8 +911,23 @@ int skia_has_gl_surface(void) {
     return s_glSurface != nullptr ? 1 : 0;
 }
 
+void gl_trace_start(void) {
+    _log("=== GL TRACE START (frame 5) ===");
+    gl_trace_enable();
+}
+void gl_trace_stop(void) {
+    gl_trace_disable();
+    char msg[64];
+    snprintf(msg, sizeof(msg), "=== GL TRACE END (%d calls) ===", _gl_trace_call);
+    _log(msg);
+}
+
 void skia_gl_reset_context(void) {
     if (s_grContext) s_grContext->resetContext();
+}
+
+int _skia_is_desktop_context(void) {
+    return _is_desktop_context ? 1 : 0;
 }
 
 } /* extern "C" */

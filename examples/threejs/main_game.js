@@ -144,8 +144,9 @@ let cameraAngle = 0;
 let cameraHeight = 2.5;
 let cameraDistance = 5.5;
 
-let laserSound;
+let laserSound, explosionSound;
 loadSound('sounds/laser.mp3').then(s => { laserSound = s; });
+loadSound('sounds/explosion.mp3').then(s => { explosionSound = s; });
 
 let btnSouthWas = false;
 let btnEastWas = false;
@@ -200,10 +201,10 @@ function animate(time) {
   }
 
   // Play laser on face button press
-  if (p1.BUTTON_SOUTH.pressed && !btnSouthWas) { console.log('LASER S'); playSound(laserSound); }
-  if (p1.BUTTON_EAST.pressed && !btnEastWas) { console.log('LASER E'); playSound(laserSound); }
-  if (p1.BUTTON_WEST.pressed && !btnWestWas) { console.log('LASER W'); playSound(laserSound); }
-  if (p1.BUTTON_NORTH.pressed && !btnNorthWas) { console.log('LASER N'); playSound(laserSound); }
+  if (p1.BUTTON_SOUTH.pressed && !btnSouthWas) { playSound(laserSound); }
+  if (p1.BUTTON_EAST.pressed && !btnEastWas) { playSound(explosionSound); }
+  if (p1.BUTTON_WEST.pressed && !btnWestWas) { playSound(laserSound); }
+  if (p1.BUTTON_NORTH.pressed && !btnNorthWas) { playSound(explosionSound); }
   btnSouthWas = p1.BUTTON_SOUTH.pressed;
   btnEastWas = p1.BUTTON_EAST.pressed;
   btnWestWas = p1.BUTTON_WEST.pressed;
