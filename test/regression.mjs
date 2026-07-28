@@ -507,6 +507,68 @@ requestAnimationFrame(loop);
      rr === 'function 255,0,0 0,0,0 255,0,0', rr || '(no output)');
 }
 
+/* ── 17. Canvas2D frames are not upside down (KNOWN FAILING) ────────────────
+ * Every other check in this file reads pixels back through the same GL path
+ * the cart renders into, so a whole-frame vertical flip cancels out and is
+ * invisible to all of them -- 16/16 green while every 2D frame ships inverted.
+ * This one goes through the SHIPPED player instead and inspects the PNG, which
+ * is what a user actually sees.
+ *
+ * Measured: a cart filling canvas-top green and canvas-bottom red produces a
+ * PNG with red on top. Text renders upside down in hello_canvas and mirrored
+ * in space. A pure-WebGL control cart through the SAME player is upright, so
+ * the host is fine and the fault is in our Canvas2D presentation.
+ *
+ * Not yet root-caused: neither the GLES blit's src-Y inversion nor Ganesh's
+ * kTopLeft/kBottomLeft origin changes the output, so the flip enters
+ * somewhere downstream of both. Left FAILING on purpose rather than deleted --
+ * a skipped check is a forgotten check. */
+{
+  const { mkdirSync, writeFileSync } = await import('node:fs');
+  const { execFileSync } = await import('node:child_process');
+  const d = join(tmp, 'orient');
+  mkdirSync(d, { recursive: true });
+  writeFileSync(join(d, 'main.js'), `
+const c=document.getElementById('game'); c.width=200; c.height=100;
+const ctx=c.getContext('2d');
+function loop(){
+  ctx.fillStyle='#000000'; ctx.fillRect(0,0,200,100);
+  ctx.fillStyle='#00ff00'; ctx.fillRect(0,0,200,20);    // canvas TOP
+  ctx.fillStyle='#ff0000'; ctx.fillRect(0,80,200,20);   // canvas BOTTOM
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+`);
+  const wasc = pack(d, join(tmp, 'orient.wasc'), 'or');
+  const png = join(tmp, 'orient.png');
+  const player = presolve(WASMCART, 'bin/wasmcart-play.js');
+  let top = '(not run)';
+  if (!existsSync(player)) {
+    skipped('Canvas2D frames are upright', 'wasmcart player not found');
+  } else {
+    try {
+      execFileSync('node', [player, wasc, '--frames', '30', '--shot', png],
+        { stdio: 'ignore', timeout: 180000 });
+      // Decode just enough PNG to sample the top row: zlib-inflate the IDAT
+      // and read scanline 2, which sits inside the green band if upright.
+      const { inflateSync } = await import('node:zlib');
+      const buf = readFileSync(png);
+      let idat = [], off = 8;
+      while (off < buf.length) {
+        const len = buf.readUInt32BE(off);
+        const type = buf.toString('ascii', off + 4, off + 8);
+        if (type === 'IDAT') idat.push(buf.subarray(off + 8, off + 8 + len));
+        off += 12 + len;
+      }
+      const raw = inflateSync(Buffer.concat(idat));
+      const stride = 200 * 3 + 1;           // RGB8 + per-row filter byte
+      const row = 2, base = row * stride + 1 + 100 * 3;
+      top = `${raw[base]},${raw[base + 1]},${raw[base + 2]}`;
+    } catch (e) { top = 'ERR:' + String(e.message).slice(0, 40); }
+    ok('Canvas2D frames are upright', top === '0,255,0', `top row = ${top} (want 0,255,0)`);
+  }
+}
+
 rmSync(tmp, { recursive: true, force: true });
 console.log(`\n${pass} passed, ${fail} failed${skip ? `, ${skip} skipped` : ''}`);
 process.exit(fail ? 1 : 0);
