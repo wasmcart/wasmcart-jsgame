@@ -376,6 +376,10 @@ void wc_init(void) {
     WC_LOG("jsgame cart initialized");
 }
 
+/* Microtask budget per frame. Generous for real games (the init pump uses
+ * 1000) while still bounding a hostile or runaway cart. */
+#define MAX_JOBS_PER_FRAME 4096
+
 /* ── wc_render ───────────────────────────────────────────────────── */
 
 __attribute__((export_name("wc_render")))
@@ -401,9 +405,24 @@ void wc_render(void) {
         }
     }
 
-    /* Execute pending jobs (Promise microtasks) */
+    /* Execute pending jobs (Promise microtasks).
+     *
+     * BOUNDED. An unbounded drain never returns for a cart that reschedules a
+     * microtask from inside a microtask -- four lines of legal JS:
+     *
+     *     function spin(){ Promise.resolve().then(spin); }  spin();
+     *
+     * which hangs wc_render, and with it the host, forever. That is reachable
+     * by any untrusted cart, which is exactly what this runtime promises to be
+     * safe against. Measured before the bound: runFrame never returned in 45s.
+     *
+     * A game that legitimately exceeds the budget in one frame just continues
+     * draining on the next -- microtasks are not dropped, only spread. The
+     * init pump above is already capped the same way. */
     JSContext *pctx;
-    while (JS_ExecutePendingJob(rt, &pctx) > 0) {}
+    for (int job = 0; job < MAX_JOBS_PER_FRAME; job++) {
+        if (JS_ExecutePendingJob(rt, &pctx) <= 0) break;
+    }
 
     /* Fire expired timers */
     pump_timers();

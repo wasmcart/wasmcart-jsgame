@@ -253,9 +253,13 @@ void pump_workers(void) {
             JS_FreeValue(w->wctx, global);
         }
 
-        /* Run worker's pending microtasks */
+        /* Run worker's pending microtasks -- BOUNDED for the same reason as
+         * the main pump in cart_main.c: a worker that reschedules a microtask
+         * from inside a microtask would otherwise hang the host forever. */
         JSContext *pctx;
-        while (JS_ExecutePendingJob(w->rt, &pctx) > 0) {}
+        for (int job = 0; job < 4096; job++) {
+            if (JS_ExecutePendingJob(w->rt, &pctx) <= 0) break;
+        }
 
         /* Deliver messages from worker → main */
         while (msg_queue_pop(&w->from_worker, msg_buf, &msg_len)) {
