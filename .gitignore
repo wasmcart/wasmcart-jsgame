@@ -19,3 +19,6 @@ wasmcart.log
 .DS_Store
 *.swp
 *~
+
+# QuickJS source, fetched by setup_quickjs.sh (upstream, not ours to vendor)
+vendor/quickjs/

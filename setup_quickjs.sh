@@ -8,7 +8,11 @@
 
 set -e
 
-QUICKJS_DIR="/tmp/quickjs"
+HERE="$(cd "$(dirname "$0")" && pwd)"
+
+# QuickJS lives in the repo, NOT /tmp: /tmp wipes on reboot and took the whole
+# JS engine source with it. Override with QUICKJS_DIR=/path for a shared checkout.
+QUICKJS_DIR="${QUICKJS_DIR:-$HERE/vendor/quickjs}"
 # NOTE: this was previously set to "2024-01-13" and NEVER USED -- the clone
 # below always took HEAD, so nothing was actually pinned to it. Set
 # QUICKJS_REF to a tag/commit for a real pin, or leave empty to track HEAD.

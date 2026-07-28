@@ -18,7 +18,9 @@ cd "$HERE"
 EMSDK_ROOT="$(cd ../emsdk && pwd)"
 source "$EMSDK_ROOT/emsdk_env.sh" 2>/dev/null || true
 
-QUICKJS_SRC="/tmp/quickjs"
+# QuickJS lives in the repo, NOT /tmp: /tmp wipes on reboot and took the whole
+# JS engine source with it. Override with QUICKJS_SRC=/path for a shared checkout.
+QUICKJS_SRC="${QUICKJS_SRC:-$HERE/vendor/quickjs}"
 WASMCART_H="$HERE/../wasmcart-examples/hello/wasmcart.h"
 PORTING="$HERE/../wasmcart/porting"
 
