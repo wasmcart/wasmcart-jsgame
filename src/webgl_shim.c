@@ -142,6 +142,60 @@ static int get_typed_array_data(JSContext *ctx, JSValue val,
     return 0;
 }
 
+/* Bytes a GL pixel rectangle needs, or 0 if the format/type is unknown or the
+ * arithmetic would overflow.
+ *
+ * texImage2D/texSubImage2D/readPixels each took width/height from JS and passed
+ * them to GL alongside a caller buffer whose length was fetched and then
+ * DISCARDED. readPixels was the dangerous one: GL WRITES w*h*bpp bytes into
+ * that buffer, so `gl.readPixels(0,0,64,64,RGBA,UNSIGNED_BYTE,
+ * new Uint8Array(16))` wrote 16KB into 16 bytes and took the whole runtime
+ * down with "memory access out of bounds". The upload paths are the read-side
+ * equivalent, leaking adjacent heap into a texture.
+ *
+ * Unknown enums return 0 and callers skip the check rather than reject: this
+ * table covers what the shim exposes, and a wrong REJECT would break drawing.
+ * GL itself still validates the call. */
+static size_t gl_pixel_bytes(uint32_t format, uint32_t type,
+                             int32_t width, int32_t height)
+{
+    if (width <= 0 || height <= 0) return 0;
+
+    int channels;
+    switch (format) {
+        case 0x1906: channels = 1; break;  /* ALPHA           */
+        case 0x1909: channels = 1; break;  /* LUMINANCE       */
+        case 0x190A: channels = 2; break;  /* LUMINANCE_ALPHA */
+        case 0x1903: channels = 1; break;  /* RED             */
+        case 0x8227: channels = 2; break;  /* RG              */
+        case 0x1907: channels = 3; break;  /* RGB             */
+        case 0x1908: channels = 4; break;  /* RGBA            */
+        default: return 0;
+    }
+
+    size_t per_pixel;
+    switch (type) {
+        case 0x1401: per_pixel = (size_t)channels * 1; break;  /* UNSIGNED_BYTE  */
+        case 0x1400: per_pixel = (size_t)channels * 1; break;  /* BYTE           */
+        case 0x1403: per_pixel = (size_t)channels * 2; break;  /* UNSIGNED_SHORT */
+        case 0x1402: per_pixel = (size_t)channels * 2; break;  /* SHORT          */
+        case 0x1405: per_pixel = (size_t)channels * 4; break;  /* UNSIGNED_INT   */
+        case 0x1404: per_pixel = (size_t)channels * 4; break;  /* INT            */
+        case 0x1406: per_pixel = (size_t)channels * 4; break;  /* FLOAT          */
+        case 0x140B: per_pixel = (size_t)channels * 2; break;  /* HALF_FLOAT     */
+        /* Packed formats: one unit per pixel regardless of channel count. */
+        case 0x8033: per_pixel = 2; break;  /* UNSIGNED_SHORT_4_4_4_4 */
+        case 0x8034: per_pixel = 2; break;  /* UNSIGNED_SHORT_5_5_5_1 */
+        case 0x8363: per_pixel = 2; break;  /* UNSIGNED_SHORT_5_6_5   */
+        default: return 0;
+    }
+
+    /* Overflow guard before the product is formed. */
+    if ((int64_t)width * (int64_t)height > (int64_t)(SIZE_MAX / per_pixel))
+        return 0;
+    return (size_t)width * (size_t)height * per_pixel;
+}
+
 /* ── GL function bindings ────────────────────────────────────────── */
 
 /* Simple 0-arg void functions */
@@ -397,8 +451,14 @@ static JSValue js_glTexImage2D(JSContext *ctx, JSValueConst this_val,
     const void *pixels = NULL;
     uint8_t *data; size_t len;
     if (argc > 8 && !JS_IsNull(argv[8]) && !JS_IsUndefined(argv[8])) {
-        if (get_typed_array_data(ctx, argv[8], &data, &len))
+        if (get_typed_array_data(ctx, argv[8], &data, &len)) {
+            size_t need = gl_pixel_bytes(format, type, (int32_t)width, (int32_t)height);
+            if (need && need > len)
+                return JS_ThrowRangeError(ctx,
+                    "texImage2D: data is %u bytes but %ux%u needs %u",
+                    (unsigned)len, width, height, (unsigned)need);
             pixels = data;
+        }
     }
     glTexImage2D(target, level, internalformat, width, height, border, format, type, pixels);
     return JS_UNDEFINED;
@@ -414,8 +474,14 @@ static JSValue js_glTexSubImage2D(JSContext *ctx, JSValueConst this_val,
 
     uint8_t *data; size_t len;
     const void *pixels = NULL;
-    if (argc > 8 && get_typed_array_data(ctx, argv[8], &data, &len))
+    if (argc > 8 && get_typed_array_data(ctx, argv[8], &data, &len)) {
+        size_t need = gl_pixel_bytes(format, type, (int32_t)width, (int32_t)height);
+        if (need && need > len)
+            return JS_ThrowRangeError(ctx,
+                "texSubImage2D: data is %u bytes but %ux%u needs %u",
+                (unsigned)len, width, height, (unsigned)need);
         pixels = data;
+    }
     glTexSubImage2D(target, level, xoff, yoff, width, height, format, type, pixels);
     return JS_UNDEFINED;
 }
@@ -786,8 +852,16 @@ static JSValue js_glReadPixels(JSContext *ctx, JSValueConst t, int n, JSValueCon
     JS_ToInt32(ctx, &w, a[2]); JS_ToInt32(ctx, &h, a[3]);
     JS_ToUint32(ctx, &fmt, a[4]); JS_ToUint32(ctx, &type, a[5]);
     uint8_t *data; size_t len;
-    if (n > 6 && get_typed_array_data(ctx, a[6], &data, &len))
+    if (n > 6 && get_typed_array_data(ctx, a[6], &data, &len)) {
+        /* GL WRITES here. A short buffer is a heap overflow, not a leak:
+         * 64x64 RGBA into a 16-byte Uint8Array took the runtime down. */
+        size_t need = gl_pixel_bytes(fmt, type, w, h);
+        if (need && need > len)
+            return JS_ThrowRangeError(ctx,
+                "readPixels: data is %u bytes but %dx%d needs %u",
+                (unsigned)len, w, h, (unsigned)need);
         glReadPixels(x, y, w, h, fmt, type, data);
+    }
     return JS_UNDEFINED;
 }
 

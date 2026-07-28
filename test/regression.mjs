@@ -329,6 +329,59 @@ requestAnimationFrame(loop);
      !!dm && dm[1] === '1' && dm[2] === 'threw', di || '(none)');
 }
 
+/* ── 13. GL pixel paths bound to the real buffer (webgl_shim.c) ──────────────
+ * texImage2D/texSubImage2D/readPixels each fetched the buffer length and then
+ * DISCARDED it, trusting JS-supplied width/height. readPixels is the severe
+ * one -- GL WRITES w*h*bpp bytes, so 64x64 RGBA into a 16-byte Uint8Array was
+ * a heap overflow that killed the whole runtime, reachable from cart JS. */
+{
+  const { mkdirSync, writeFileSync } = await import('node:fs');
+  const d = join(tmp, 'glbounds');
+  mkdirSync(d, { recursive: true });
+  writeFileSync(join(d, 'main.js'), `
+const c=document.getElementById('game'); c.width=64; c.height=64;
+const gl=c.getContext('webgl2');
+let n=0;
+function loop(){
+  gl.clearColor(1,0,0,1); gl.clear(gl.COLOR_BUFFER_BIT);
+  if(++n===20 && !globalThis.p){ globalThis.p=1;
+    const R=[];
+    const tex=gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D,tex);
+    const ok=new Uint8Array(8*8*4);
+    try { gl.readPixels(0,0,8,8,gl.RGBA,gl.UNSIGNED_BYTE,ok);
+          R.push('rp_ctl:'+(ok[0]===255&&ok[1]===0?'red':'wrong')); }
+    catch(e){ R.push('rp_ctl:THREW'); }
+    try { gl.readPixels(0,0,64,64,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array(16));
+          R.push('rp_lie:ok'); } catch(e){ R.push('rp_lie:threw'); }
+    try { gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,8,8,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array(8*8*4));
+          R.push('ti_ctl:ok'); } catch(e){ R.push('ti_ctl:THREW'); }
+    try { gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,64,64,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array(16));
+          R.push('ti_lie:ok'); } catch(e){ R.push('ti_lie:threw'); }
+    console.log('GLB ' + R.join(' '));
+  }
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+`);
+  const wasc = pack(d, join(tmp, 'glbounds.wasc'), 'gb');
+  const { gl } = createWebGL2Context(64, 64);
+  const host = new CartHost({});
+  const cap = [];
+  const real = console.error;
+  console.error = (...a) => cap.push(a.join(' '));
+  let survived = true;
+  try {
+    await host.load(readFileSync(wasc), { glBackend: gl, width: 64, height: 64 });
+    for (let i = 0; i < 30; i++) host.runFrame([]);
+  } catch (e) { survived = false; }
+  console.error = real;
+  const g = (cap.find((l) => l.includes('GLB ')) ?? '').replace(/^.*GLB /, '').trim();
+  // Honest calls work; both lying calls throw; and the runtime is still alive.
+  ok('GL pixel calls bound to buffer length',
+     survived && g === 'rp_ctl:red rp_lie:threw ti_ctl:ok ti_lie:threw',
+     survived ? (g || '(none)') : 'runtime died (heap overflow)');
+}
+
 rmSync(tmp, { recursive: true, force: true });
 console.log(`\n${pass} passed, ${fail} failed${skip ? `, ${skip} skipped` : ''}`);
 process.exit(fail ? 1 : 0);
