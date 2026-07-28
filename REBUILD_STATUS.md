@@ -1,8 +1,55 @@
-# Rebuild status — the tree does not currently rebuild correctly
+# Rebuild notes — RESOLVED 2026-07-28
 
-**The committed `build/cart.wasm` works. A fresh `./build.sh` produces a binary
-that crashes.** Source changes are safe to make; they just cannot be shipped
-until this is resolved. Written 2026-07-28 after bisecting.
+**The tree rebuilds cleanly and all 8 examples work.** `rm -rf obj build/cart.wasm
+&& bash build.sh` at plain `-O2`, no assertions crutch.
+
+| example | colours | example | colours |
+|---|---|---|---|
+| hello_audio | 572 | threejs | 4971 |
+| hello_canvas | 339 (text renders) | space | 500 |
+| hello_fetch | 1 (solid bg by design) | space3d | 35 |
+| hello_webgl | 47917 | adventure-ai | 233 |
+
+## The five bugs this file records
+
+1. **Skia scanned a font directory that does not exist.**
+   `skiac_font_collection` called `SkFontMgr_New_Custom_Directory("/fonts/")`, a
+   MEMFS path nothing creates. Out-of-bounds write on the FIRST Canvas 2D call.
+   Fixed in `build-libcanvas/patches/wasm-no-font-dir.patch`.
+
+2. **`wasmcart-skia/build.sh` copied 4 archives, consumers need 16.** Silent
+   partial link → runtime memory fault. Fixed there; that repo is now tracked.
+
+3. **`build_webaudio_lib.sh` missed the opus/ogg include dirs.** From-scratch
+   builds died on `opus_multistream.h: file not found`; it only ever worked
+   because `obj/libwebaudio.a` was a stale prebuilt.
+
+4. **`MAXIMUM_MEMORY=1GB` was too low.** `space` decodes 21 MB of .ogg to
+   ~500 MB of f32 PCM. Raised to 2 GB.
+
+5. **`TOTAL_STACK` → `STACK_SIZE`.** Renamed in emscripten 3.1.27 and silently
+   ignored since, so the intended 8 MB stack was never applied.
+
+## Two traps that cost the most time
+
+**`wasmcart-skia/out/include/skia_c.{cpp,hpp}` are COPIES.** The wrapper
+compiles from `napi-canvas/skia-c/`, and `wasmcart-skia/build.sh` short-circuits
+when `out/libskia.a` exists — so editing the copies changes nothing AND the copy
+step never reruns. Three consecutive "that fix did not work" results were
+measuring a stale `libskiac.a`, which talked me out of the correct hypothesis.
+Source changes go in `build-libcanvas/patches/`.
+
+**Every one of these failures looks identical:** `memory access out of bounds`,
+no hint of the cause. A missing archive, a nonexistent font path, and an
+exhausted memory ceiling all produce the same trap. Bisect by *removing things*,
+and confirm each fix actually reached the binary before concluding it failed.
+
+---
+
+# Appendix: the investigation, in the order it happened
+
+Kept because the dead ends are the useful part — several conclusions below were
+WRONG and are marked where they were corrected later.
 
 ## Symptom
 

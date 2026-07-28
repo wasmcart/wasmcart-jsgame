@@ -160,11 +160,25 @@ See [architecture.md](architecture.md) for full security comparison and feature 
 
 Only needed if you're modifying the runtime itself. Game developers just use the pre-built `build/cart.wasm`.
 
-**Prerequisites:** [Emscripten SDK](https://emscripten.org), [QuickJS](https://bellard.org/quickjs/) (`bash setup_quickjs.sh`), [Skia](https://skia.org) bitcode (`cd ../wasmcart-skia && bash build.sh`), [webaudio-node](https://github.com/monteslu/webaudio-node) sources
+**Prerequisites**, as sibling checkouts next to this repo:
+
+| | what | why |
+|---|---|---|
+| [emsdk](https://emscripten.org) | `../emsdk`, or `emcc` on PATH | the compiler |
+| [QuickJS](https://bellard.org/quickjs/) | `bash setup_quickjs.sh` | the JS engine. Builds against bellard/quickjs or [quickjs-ng](https://github.com/quickjs-ng/quickjs) — `cutils.c` exists only in the former and is handled conditionally |
+| [Skia](https://skia.org) | `cd ../wasmcart-skia && bash build.sh` | Canvas 2D. Needs `../napi-canvas` (the Skia C wrapper) and pulls Skia itself (~2GB, 10–20 min first run) |
+| [build-libcanvas](https://github.com/monteslu/build-libcanvas) | applies `patches/` to napi-canvas | **required** — one patch fixes a wasm crash on the first Canvas 2D call |
+| [webaudio-node](https://github.com/monteslu/webaudio-node) | `../webaudio-node` | audio decoders |
 
 ```bash
 bash build.sh          # → build/cart.wasm (~5MB)
 ```
+
+**Editing the Skia wrapper?** `wasmcart-skia/out/include/skia_c.{cpp,hpp}` are
+build *outputs*, copied from `napi-canvas/skia-c/`. Editing them does nothing.
+Source changes belong in `build-libcanvas/patches/`. See
+[REBUILD_STATUS.md](REBUILD_STATUS.md), which records that trap and four build
+bugs fixed in July 2026.
 
 ## Architecture
 
