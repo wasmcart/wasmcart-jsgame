@@ -24,7 +24,12 @@ mkdir -p obj/webaudio
 CXXFLAGS="-O2 -std=c++17 -msimd128 -msse -msse2 \
     -D__i386__ -DDR_MP3_FLOAT_OUTPUT -DDR_MP3_ONLY_SIMD \
     -Wno-narrowing -Wno-deprecated-declarations \
-    -I$WA_SRC/.. -I$WA_SRC/../vendor"
+    -I$WA_SRC/.. -I$WA_SRC/../vendor \
+    `# opusfile.h includes <opus_multistream.h> and <ogg/ogg.h>, which live in` \
+    `# the vendored opus/ogg include dirs. webaudio-node's own` \
+    `# scripts/build-unified-real.sh passes these; this script did not, so a` \
+    `# from-scratch build failed with "opus_multistream.h: file not found".` \
+    -I$WA_SRC/../vendor/opus/include -I$WA_SRC/../vendor/ogg/include"
 
 echo "=== Compiling webaudio-node C++ sources ==="
 

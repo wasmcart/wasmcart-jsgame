@@ -257,3 +257,42 @@ emar rcs out/libskiac.a out/skia_c.o
 
 The ASAN stack that named `skiac_font_collection` was right all along -- I
 disbelieved it when my (ineffective) edits did not change the outcome.
+
+
+## From-scratch rebuild verified (2026-07-28)
+
+`rm -rf obj build/cart.wasm && bash build.sh` now completes and every example
+that can be rebuilt from source works.
+
+One more thing had to be fixed to get there: `build_webaudio_lib.sh` did not
+pass `-I.../vendor/opus/include -I.../vendor/ogg/include`, so a from-scratch
+build died with `opus_multistream.h: file not found` (opusfile.h includes it).
+It only ever worked because `obj/libwebaudio.a` was a stale prebuilt artifact
+that the script skips when present. webaudio-node's own
+`scripts/build-unified-real.sh` passes those include dirs; this one now does too.
+
+### Results, 60 frames each, at plain -O2 with no assertions
+
+| example | colours | note |
+|---|---|---|
+| hello_audio | 572 | |
+| hello_canvas | 345 | text renders |
+| hello_fetch | 1 | draws a solid background by design |
+| hello_webgl | 47960 | |
+| threejs | 5188 | |
+| adventure-ai | 233 | loading screen, text correct |
+| space | — | **crashes, PRE-EXISTING** |
+| space3d | — | **crashes, PRE-EXISTING** |
+
+`space` and `space3d` are NOT regressions: the carts monteslu shipped, which
+embed the OLD runtime, fail identically (`memory access out of bounds` during
+load). Verified by running `examples/space/space.wasc` as committed.
+
+### Packing gotcha
+
+`examples/space`, `examples/space3d` and `examples/adventure-ai` contain ONLY a
+prebuilt `.wasc` -- no source. Packing those directories produces a cart with no
+game (renders 1 colour, "passes" every count-based check). The real sources are
+in the `jsgames` repo, and they must be packed from the game's ROOT, not its
+`dist/`: packing `adventure-ai/dist` gave 1 colour, packing `adventure-ai/` gave
+233 and a correct loading screen.
