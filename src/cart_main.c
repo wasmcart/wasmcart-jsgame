@@ -26,6 +26,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <time.h>
 
 #include "wasmcart.h"
 #include "quickjs.h"
@@ -376,9 +377,29 @@ void wc_init(void) {
     WC_LOG("jsgame cart initialized");
 }
 
-/* Microtask budget per frame. Generous for real games (the init pump uses
- * 1000) while still bounding a hostile or runaway cart. */
-#define MAX_JOBS_PER_FRAME 4096
+/*
+ * Microtask budget per frame: TIME-based, with a job count as a backstop.
+ *
+ * A count alone is the wrong shape. 4096 trivial microtasks cost ~5ms here,
+ * which is 30% of a 60fps frame handed to a hostile cart for free -- and on a
+ * slower device, or with microtasks that each do real work, the same count is
+ * far worse. What actually needs bounding is TIME, not iterations.
+ *
+ * clock_gettime(CLOCK_MONOTONIC) does advance within a single wasm call
+ * (measured: 7ms inside one call), so this is real elapsed time, not the
+ * host's per-frame timestamp, which is frozen for the duration of wc_render.
+ *
+ * The count remains as a backstop for hosts whose clock does not advance --
+ * without it, a frozen clock would turn this back into an unbounded drain.
+ */
+#define MAX_JOB_MS         4      /* ~25% of a 60fps frame -- VERIFIED controlling: setting this to 1 gives 1ms/frame, 4 gives 4ms */
+#define MAX_JOBS_PER_FRAME 4096   /* backstop if the clock never moves */
+
+static double job_now_ms(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0;
+    return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1000000.0;
+}
 
 /* ── wc_render ───────────────────────────────────────────────────── */
 
@@ -420,8 +441,14 @@ void wc_render(void) {
      * draining on the next -- microtasks are not dropped, only spread. The
      * init pump above is already capped the same way. */
     JSContext *pctx;
-    for (int job = 0; job < MAX_JOBS_PER_FRAME; job++) {
-        if (JS_ExecutePendingJob(rt, &pctx) <= 0) break;
+    {
+        const double deadline = job_now_ms() + MAX_JOB_MS;
+        for (int job = 0; job < MAX_JOBS_PER_FRAME; job++) {
+            if (JS_ExecutePendingJob(rt, &pctx) <= 0) break;
+            /* Check every 64 jobs: clock_gettime is a host call, and doing it
+             * per microtask costs more than the microtasks themselves. */
+            if ((job & 63) == 63 && job_now_ms() >= deadline) break;
+        }
     }
 
     /* Fire expired timers */

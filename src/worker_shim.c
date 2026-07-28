@@ -17,6 +17,7 @@
 
 #include <stdint.h>
 #include <string.h>
+#include <time.h>
 #include <stdlib.h>
 #include "quickjs.h"
 #include "wasmcart.h"
@@ -253,12 +254,22 @@ void pump_workers(void) {
             JS_FreeValue(w->wctx, global);
         }
 
-        /* Run worker's pending microtasks -- BOUNDED for the same reason as
+        /* Run worker's pending microtasks -- TIME-bounded, same reasoning as
          * the main pump in cart_main.c: a worker that reschedules a microtask
-         * from inside a microtask would otherwise hang the host forever. */
+         * from inside a microtask would otherwise hang the host forever, and a
+         * pure count still hands it a fixed slice of every frame. */
         JSContext *pctx;
-        for (int job = 0; job < 4096; job++) {
-            if (JS_ExecutePendingJob(w->rt, &pctx) <= 0) break;
+        {
+            struct timespec ts;
+            double deadline = 0;
+            if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
+                deadline = (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1e6 + 2.0;
+            for (int job = 0; job < 4096; job++) {
+                if (JS_ExecutePendingJob(w->rt, &pctx) <= 0) break;
+                if ((job & 63) == 63 && deadline > 0 &&
+                    clock_gettime(CLOCK_MONOTONIC, &ts) == 0 &&
+                    ((double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1e6) >= deadline) break;
+            }
         }
 
         /* Deliver messages from worker → main */
