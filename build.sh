@@ -131,15 +131,7 @@ if [ -f obj/emstubs.o ]; then
     OBJS="$OBJS obj/emstubs.o"
 fi
 
-# -sASSERTIONS=1 is LOAD-BEARING, not a debug leftover. Without it a -O2 build
-# faults with "memory access out of bounds" on frame 0 of any cart that draws a
-# second fillRect alongside arc/strokeRect/fillText -- hello_canvas, for one.
-# Bisected: -O2 alone crashes, -O2 -sASSERTIONS=1 does not, and it is neither
-# the link level (-O1 link still crashes) nor the stack (16MB still crashes).
-# That pattern -- behaviour changing with optimisation -- means undefined
-# behaviour somewhere in the C/C++ that ASSERTIONS happens to mask. The real
-# bug is NOT fixed; this keeps the tree buildable while it is hunted.
-emcc -O2 -sASSERTIONS=1 \
+emcc -O2 \
     -sSTANDALONE_WASM=1 \
     \
     -sALLOW_MEMORY_GROWTH=1 \

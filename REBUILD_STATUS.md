@@ -216,3 +216,44 @@ hello_canvas against `build/cart-asan.wasm`, and read the stack. That is the
 whole reason to keep that script.
 
 `-sASSERTIONS=1` remains in `build.sh` as the working mitigation.
+
+
+## FIXED 2026-07-28: SkFontMgr_New_Custom_Directory on a path that does not exist
+
+`skiac_font_collection`'s constructor calls
+
+```cpp
+font_mgr(SkFontMgr_New_Custom_Directory(SK_FONT_FILE_PREFIX))
+```
+
+and `wasmcart-skia/build.sh` compiles it with `-DSK_FONT_FILE_PREFIX="/fonts/"`
+-- a MEMFS path that **nothing ever creates**. The directory scan walks it and
+writes out of bounds. On wasm the constructor now uses
+`SkFontMgr_New_Custom_Empty()` instead: no scan, and fonts arrive through the
+dynamic provider exactly as they already did.
+
+`-sASSERTIONS=1` is no longer needed. Plain `-O2` renders hello_canvas at 338
+colours, with text.
+
+### The mistake that cost the most time here
+
+I spent several bisection rounds editing `wasmcart-skia/out/include/skia_c.hpp`.
+**That file is a build OUTPUT, copied from `napi-canvas/skia-c/skia_c.hpp`.**
+Editing it changes nothing, and `wasmcart-skia/build.sh` additionally
+short-circuits when `out/libskia.a` already exists, so even the copy never
+reran. Three "the fix did not work" results in a row were measuring a stale
+`libskiac.a`.
+
+Edit `napi-canvas/skia-c/skia_c.hpp`, then rebuild the wrapper:
+
+```bash
+cd wasmcart-skia
+rm -f out/libskiac.a out/skia_c.o
+em++ -O2 -std=c++20 -fno-exceptions -fno-rtti -DSK_RELEASE -DSK_DISABLE_TRACING \
+  '-DSK_FONT_FILE_PREFIX="/fonts/"' -I../napi-canvas/skia -I../napi-canvas/skia-c \
+  -c ../napi-canvas/skia-c/skia_c.cpp -o out/skia_c.o
+emar rcs out/libskiac.a out/skia_c.o
+```
+
+The ASAN stack that named `skiac_font_collection` was right all along -- I
+disbelieved it when my (ineffective) edits did not change the outcome.
