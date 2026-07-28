@@ -1009,16 +1009,21 @@ static JSValue js_get_gamepads(JSContext *ctx, JSValueConst this_val,
         }
         JS_SetPropertyStr(ctx, pad, "buttons", buttons);
 
-        /* Axes array — [leftX, leftY, rightX, rightY] normalized to -1..1 */
+        /* Axes array — [leftX, leftY, rightX, rightY] normalized to -1..1.
+         * The wire type is int16_t, so full negative deflection is -32768 and
+         * -32768/32767.0 is -1.0000305 — outside the range the Gamepad API
+         * promises. Games that trust the contract (Math.acos(axis), or an
+         * unclamped position += axis) misbehave on exactly one stick position.
+         * Clamp rather than divide by 32768: 32767 must still map to 1.0. */
         JSValue axes = JS_NewArray(ctx);
-        JS_SetPropertyUint32(ctx, axes, 0,
-            JS_NewFloat64(ctx, pads[i].left_x / 32767.0));
-        JS_SetPropertyUint32(ctx, axes, 1,
-            JS_NewFloat64(ctx, pads[i].left_y / 32767.0));
-        JS_SetPropertyUint32(ctx, axes, 2,
-            JS_NewFloat64(ctx, pads[i].right_x / 32767.0));
-        JS_SetPropertyUint32(ctx, axes, 3,
-            JS_NewFloat64(ctx, pads[i].right_y / 32767.0));
+        const int16_t raw_axes[4] = {
+            pads[i].left_x, pads[i].left_y, pads[i].right_x, pads[i].right_y
+        };
+        for (int a = 0; a < 4; a++) {
+            double v = raw_axes[a] / 32767.0;
+            if (v < -1.0) v = -1.0;
+            JS_SetPropertyUint32(ctx, axes, a, JS_NewFloat64(ctx, v));
+        }
         JS_SetPropertyStr(ctx, pad, "axes", axes);
 
         JS_SetPropertyUint32(ctx, arr, i, pad);

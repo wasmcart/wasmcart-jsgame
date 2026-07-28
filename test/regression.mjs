@@ -207,6 +207,44 @@ requestAnimationFrame(loop);
      line.replace(/^\[cart\] F404 /, '').slice(0, 40) || '(no output)');
 }
 
+/* ── 8. Gamepad axis range (cart_main.c js_get_gamepads) ─────────────────────
+ * The wire type is int16_t, so full negative deflection is -32768, and
+ * -32768/32767.0 = -1.0000305 -- outside the -1..1 the Gamepad API promises.
+ * Checks BOTH ends: the clamp must not cost 32767 its exact 1.0. */
+{
+  const { mkdirSync, writeFileSync } = await import('node:fs');
+  const d = join(tmp, 'pad');
+  mkdirSync(d, { recursive: true });
+  writeFileSync(join(d, 'main.js'), `
+const c=document.getElementById('game'); c.width=320; c.height=240;
+const ctx=c.getContext('2d');
+let lo=0, hi=0, n=0;
+function loop(){
+  const g = (navigator.getGamepads()||[])[0];
+  if (g) for (const v of g.axes) { if (v<lo) lo=v; if (v>hi) hi=v; }
+  if (++n===40 && !globalThis.p){ globalThis.p=1;
+    console.log('PAD ' + lo.toFixed(7) + ' ' + hi.toFixed(7)); }
+  ctx.fillStyle='#111'; ctx.fillRect(0,0,320,240); requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+`);
+  const wasc = pack(d, join(tmp, 'pad.wasc'), 'p');
+  const { gl } = createWebGL2Context(320, 240);
+  const host = new CartHost({});
+  const cap = [];
+  const real = console.error;
+  console.error = (...a) => cap.push(a.join(' '));
+  await host.load(readFileSync(wasc), { glBackend: gl, width: 320, height: 240 });
+  // Extremes on the same frame: min on the left stick, max on the right.
+  const pad = { connected: true, buttons: 0,
+                leftX: -32768, leftY: -32768, rightX: 32767, rightY: 32767 };
+  for (let i = 0; i < 50; i++) host.runFrame([pad]);
+  console.error = real;
+  const line = (cap.find((l) => l.includes('PAD ')) ?? '').replace(/^.*PAD /, '');
+  const [lo, hi] = line.split(' ').map(Number);
+  ok('gamepad axes stay in -1..1', lo === -1 && hi === 1, `lo=${lo} hi=${hi}`);
+}
+
 rmSync(tmp, { recursive: true, force: true });
 console.log(`\n${pass} passed, ${fail} failed${skip ? `, ${skip} skipped` : ''}`);
 process.exit(fail ? 1 : 0);
