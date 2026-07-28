@@ -55,6 +55,34 @@ Small assets simply land on the wrong side of whatever is corrupt. Anyone
 re-bisecting this should vary one thing at a time and pad to fixed sizes, or
 they will chase Canvas 2D primitives for an hour like I did.
 
+## FIXED 2026-07-28: the Skia copy step was incomplete
+
+`wasmcart-skia/build.sh` copied only FOUR archives by name
+(libskia/libskshaper/libskparagraph/libskunicode_icu), so a fresh
+`rm -rf out && ./build.sh` produced **5 archives where the working tree had
+18**. The other 13 -- freetype, harfbuzz, icu, png, jpeg, webp, zlib, skcms,
+wuffs, skunicode_core -- had been copied by hand at some point and never
+scripted. The link here needs 16 of them.
+
+Fixed to copy every `.a` the Skia build produces, with a hard failure if
+`libskia.a` is absent. That turned a silent partial link into either a correct
+build or a loud error.
+
+**This fixed a real class of crash.** The 228-byte cart from the bisection below
+now runs 60 frames clean where it previously died on frame 0.
+
+## Still broken: hello_canvas
+
+`hello_canvas` STILL crashes after the Skia fix, while `hello_audio`,
+`hello_fetch` and the small synthetic carts all pass. So there is a second,
+independent bug -- narrower than the first, and specific to something
+hello_canvas does that the others do not (it is the only example using
+`fillText` + `arc` + `strokeRect` together against the Ganesh GPU path).
+
+Next step: bisect hello_canvas's own draw calls against the FIXED build, which
+is now a meaningful exercise -- before the Skia fix the results were noise, as
+the "red herring" section explains.
+
 ## What is left to check
 
 The remaining unverified variable is the **Skia link**: `libskia.a` and friends
