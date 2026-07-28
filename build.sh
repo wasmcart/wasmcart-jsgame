@@ -46,7 +46,12 @@ QUICKJS_CFLAGS="-O2 -DCONFIG_VERSION=\"2024\" \
 emcc $QUICKJS_CFLAGS -c "$QUICKJS_SRC/quickjs.c" -o obj/quickjs.o
 emcc $QUICKJS_CFLAGS -c "$QUICKJS_SRC/libregexp.c" -o obj/libregexp.o
 emcc $QUICKJS_CFLAGS -c "$QUICKJS_SRC/libunicode.c" -o obj/libunicode.o
-emcc $QUICKJS_CFLAGS -c "$QUICKJS_SRC/cutils.c" -o obj/cutils.o
+# cutils.c exists in bellard/quickjs but was merged away in quickjs-ng >=0.11.
+# Conditional, like dtoa.c below, so either engine builds.
+rm -f obj/cutils.o
+if [ -f "$QUICKJS_SRC/cutils.c" ]; then
+    emcc $QUICKJS_CFLAGS -c "$QUICKJS_SRC/cutils.c" -o obj/cutils.o
+fi
 if [ -f "$QUICKJS_SRC/dtoa.c" ]; then
     emcc $QUICKJS_CFLAGS -c "$QUICKJS_SRC/dtoa.c" -o obj/dtoa.o
 fi
@@ -115,7 +120,10 @@ SKIA_FIX=""
 if [ -f obj/skia_wasm_fix.o ]; then SKIA_FIX="obj/skia_wasm_fix.o obj/skia_path_reset.o "; fi
 SKIA_GL=""
 if [ -f obj/skia_gl_surface.o ]; then SKIA_GL="obj/skia_gl_surface.o "; fi
-OBJS="obj/cart_main.o obj/webgl_shim.o obj/canvas2d.o $SKIA_FIX $SKIA_GL obj/image_decode.o obj/audio_shim.o obj/quickjs.o obj/libregexp.o obj/libunicode.o obj/cutils.o obj/stubs.o obj/libwebaudio.a $SKIA_LIBS"
+OBJS="obj/cart_main.o obj/webgl_shim.o obj/canvas2d.o $SKIA_FIX $SKIA_GL obj/image_decode.o obj/audio_shim.o obj/quickjs.o obj/libregexp.o obj/libunicode.o obj/stubs.o obj/libwebaudio.a $SKIA_LIBS"
+if [ -f obj/cutils.o ]; then
+    OBJS="$OBJS obj/cutils.o"
+fi
 if [ -f obj/dtoa.o ]; then
     OBJS="$OBJS obj/dtoa.o"
 fi

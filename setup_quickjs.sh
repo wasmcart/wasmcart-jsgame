@@ -9,7 +9,10 @@
 set -e
 
 QUICKJS_DIR="/tmp/quickjs"
-QUICKJS_VERSION="2024-01-13"
+# NOTE: this was previously set to "2024-01-13" and NEVER USED -- the clone
+# below always took HEAD, so nothing was actually pinned to it. Set
+# QUICKJS_REF to a tag/commit for a real pin, or leave empty to track HEAD.
+QUICKJS_REF="${QUICKJS_REF:-}"
 
 if [ -d "$QUICKJS_DIR" ] && [ -f "$QUICKJS_DIR/quickjs.c" ]; then
     echo "QuickJS already at $QUICKJS_DIR"
@@ -23,6 +26,9 @@ fi
 echo "=== Cloning QuickJS ==="
 rm -rf "$QUICKJS_DIR"
 git clone --depth 1 https://github.com/bellard/quickjs.git "$QUICKJS_DIR"
+if [ -n "$QUICKJS_REF" ]; then
+    ( cd "$QUICKJS_DIR" && git fetch --depth 1 origin "$QUICKJS_REF" && git checkout -q FETCH_HEAD )
+fi
 
 echo "QuickJS source ready at $QUICKJS_DIR"
 echo "Key files: quickjs.c quickjs.h quickjs-libc.c libregexp.c libunicode.c"
