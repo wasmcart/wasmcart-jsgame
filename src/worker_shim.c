@@ -58,11 +58,26 @@ static int msg_queue_push(msg_queue_t *q, const char *data, int len) {
     return 1;
 }
 
+/* `out` must have room for MSG_MAX_LEN + 1 bytes: the copy is NUL-terminated.
+ *
+ * QuickJS's JSON tokenizer reads PAST the length it is given when a value ends
+ * in a number -- js_atof scans forward for more digits rather than stopping at
+ * buf_end. With a reused stack buffer that meant a short message inherited the
+ * tail of a longer predecessor, and JS_ParseJSON rejected perfectly valid input
+ * with "SyntaxError: unexpected data at the end".
+ *
+ * It only bit when BOTH held: the message ended in a number, AND a longer
+ * message came before it. `{"phase":"load"}` (ends in a quote) always worked,
+ * which is why every worker looked fine until one posted {frame: 3}. */
 static int msg_queue_pop(msg_queue_t *q, char *out, int *out_len) {
     int idx = q->read_idx % MSG_QUEUE_SIZE;
     if (!q->slots[idx].ready) return 0;
-    *out_len = q->slots[idx].len;
-    memcpy(out, q->slots[idx].data, q->slots[idx].len);
+    int len = q->slots[idx].len;
+    if (len < 0) len = 0;
+    if (len > MSG_MAX_LEN) len = MSG_MAX_LEN;
+    *out_len = len;
+    memcpy(out, q->slots[idx].data, len);
+    out[len] = '\0';
     q->slots[idx].ready = 0;
     q->read_idx++;
     return 1;
@@ -237,7 +252,7 @@ void pump_workers(void) {
         worker_state_t *w = &workers[i];
 
         /* Deliver messages from main → worker */
-        char msg_buf[MSG_MAX_LEN];
+        char msg_buf[MSG_MAX_LEN + 1];
         int msg_len;
         while (msg_queue_pop(&w->to_worker, msg_buf, &msg_len)) {
             JSValue global = JS_GetGlobalObject(w->wctx);

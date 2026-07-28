@@ -406,6 +406,62 @@ requestAnimationFrame(loop);
   ok('uniformMatrix4fv ignores short buffers', um === '0,255,0', umLabel);
 }
 
+/* ── 15. Workers: linked at all, and messages survive JSON round-trip ────────
+ * Two bugs stacked here. worker_shim.o was compiled by build.sh but left out
+ * of OBJS, so the whole implementation never linked and `new Worker(...)`
+ * threw "_wcWorkerCreate is not defined" -- hidden because
+ * ERROR_ON_UNDEFINED_SYMBOLS=0 is needed for the Skia/GL stubs.
+ *
+ * Underneath that: msg_queue_pop copied len bytes into a REUSED stack buffer
+ * without terminating it, and QuickJS's JSON tokenizer reads past the length
+ * it is given when a value ends in a number (js_atof scans for more digits).
+ * So a short message inherited the tail of a longer predecessor and valid
+ * JSON was rejected with "unexpected data at the end". The reply below ends
+ * in a NUMBER on purpose -- with a string-terminated reply the bug is
+ * invisible, which is exactly why it survived this long. */
+{
+  const { mkdirSync, writeFileSync } = await import('node:fs');
+  const d = join(tmp, 'worker');
+  mkdirSync(d, { recursive: true });
+  writeFileSync(join(d, 'worker.js'), `
+postMessage({phase:'load'});
+onmessage = function(e){ postMessage({phase:'recv', frame:(e&&e.data)?e.data.frame:-1}); };
+`);
+  writeFileSync(join(d, 'main.js'), `
+const c=document.getElementById('game'); c.width=64; c.height=64;
+const ctx=c.getContext('2d');
+const R=[];
+let ctorErr='';
+let w=null;
+try { w=new Worker('worker.js'); } catch(e){ ctorErr=e.message; }
+if (w) w.onmessage=(e)=>{ try { R.push(e.data.phase + ':' + (e.data.frame ?? '')); }
+                          catch(err){ R.push('cbthrew'); } };
+let n=0;
+function loop(){
+  ctx.fillStyle='#111'; ctx.fillRect(0,0,64,64);
+  if(n===3 && w) w.postMessage({payload:'x'.repeat(8), frame:3});
+  if(n===10 && w) w.postMessage({payload:'y'.repeat(64), frame:10});
+  if(++n===35 && !globalThis.p){ globalThis.p=1;
+    console.log('WRK ' + (ctorErr ? 'ctor:'+ctorErr : R.join(','))); }
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+`);
+  const wasc = pack(d, join(tmp, 'worker.wasc'), 'wk');
+  const { gl } = createWebGL2Context(64, 64);
+  const host = new CartHost({});
+  const cap = [];
+  const real = console.error;
+  console.error = (...a) => cap.push(a.join(' '));
+  await host.load(readFileSync(wasc), { glBackend: gl, width: 64, height: 64 });
+  for (let i = 0; i < 40; i++) host.runFrame([]);
+  console.error = real;
+  const wk = (cap.find((l) => l.includes('WRK ')) ?? '').replace(/^.*WRK /, '').trim();
+  // load fires at worker startup; both posts must round-trip with their frame number.
+  ok('workers link and round-trip messages',
+     wk === 'load:,recv:3,recv:10', wk || '(no output)');
+}
+
 rmSync(tmp, { recursive: true, force: true });
 console.log(`\n${pass} passed, ${fail} failed${skip ? `, ${skip} skipped` : ''}`);
 process.exit(fail ? 1 : 0);

@@ -120,7 +120,11 @@ SKIA_FIX=""
 if [ -f obj/skia_wasm_fix.o ]; then SKIA_FIX="obj/skia_wasm_fix.o obj/skia_path_reset.o "; fi
 SKIA_GL=""
 if [ -f obj/skia_gl_surface.o ]; then SKIA_GL="obj/skia_gl_surface.o "; fi
-OBJS="obj/cart_main.o obj/webgl_shim.o obj/canvas2d.o $SKIA_FIX $SKIA_GL obj/image_decode.o obj/audio_shim.o obj/quickjs.o obj/libregexp.o obj/libunicode.o obj/stubs.o obj/libwebaudio.a $SKIA_LIBS"
+# worker_shim.o was compiled above but left OUT of this list, so the whole
+# Worker implementation never linked: `new Worker(...)` threw
+# "_wcWorkerCreate is not defined" at runtime. ERROR_ON_UNDEFINED_SYMBOLS=0
+# (needed for the Skia/GL stubs) is why the link stayed silent about it.
+OBJS="obj/cart_main.o obj/webgl_shim.o obj/canvas2d.o $SKIA_FIX $SKIA_GL obj/image_decode.o obj/audio_shim.o obj/worker_shim.o obj/quickjs.o obj/libregexp.o obj/libunicode.o obj/stubs.o obj/libwebaudio.a $SKIA_LIBS"
 if [ -f obj/cutils.o ]; then
     OBJS="$OBJS obj/cutils.o"
 fi
