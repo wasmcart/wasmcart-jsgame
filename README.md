@@ -1,8 +1,12 @@
 # wasmcart-jsgame
 
-Run standard JavaScript browser games as sandboxed wasmcart `.wasc` carts. Canvas 2D, WebGL2, Web Audio, ES modules, gamepad — it all works. No code changes to your game.
+A sandboxed JavaScript game runtime in a 5MB WASM binary. Write a standard browser game — Canvas 2D, WebGL2, Web Audio, ES modules, gamepad — pack it, run it anywhere. Desktop, browser, ARM handheld, [RetroArch](https://www.retroarch.com). No code changes.
 
-A single reusable `cart.wasm` (~5MB) that is essentially a browser runtime in WASM: QuickJS + Skia (GPU-accelerated via Ganesh GL) + webaudio-node + WebGL2 passthrough + 120+ browser API shims.
+**GPU-accelerated Canvas 2D** via [Skia](https://skia.org) Ganesh GL. **Direct WebGL2** passthrough to the host GPU. **Full Web Audio** with 16 node types and 5 audio decoders, via [webaudio-node](https://github.com/monteslu/webaudio-node). **120+ browser API shims** so real games work unmodified.
+
+Runs on every [wasmcart](https://github.com/wasmcart/wasmcart) host: Node.js (SDL), browser (WebGL2), [wasmcart-native](https://github.com/wasmcart/wasmcart-native) (EGL), RetroArch ([wasmcart-libretro](https://github.com/wasmcart/wasmcart-libretro)). Same `.wasc` file, same game, everywhere.
+
+**More secure than a browser.** Games run inside [QuickJS](https://bellard.org/quickjs/) inside WASM — no DOM access, no XSS, no arbitrary network, no filesystem. You can safely run untrusted JavaScript games the way you'd run a SNES ROM.
 
 ## Make a Game
 
@@ -34,31 +38,36 @@ bash pack_game.sh my_game/ my_game.wasc "My Game"
 
 ### 3. Run it
 
+These are GL carts, so they need a GL-capable host:
+
 ```bash
 # SDL window at 1080p
-node retroemu/bin/cli.js my_game.wasc --video sdl --res 1920x1080
+npx retroemu my_game.wasc --video sdl --res 1920x1080
 
 # Fullscreen
-node retroemu/bin/cli.js my_game.wasc --video sdl -f
+npx retroemu my_game.wasc --video sdl -f
 
 # Terminal (chafa rendering)
-node retroemu/bin/cli.js my_game.wasc
+npx retroemu my_game.wasc
 ```
 
-The same `.wasc` runs on any wasmcart host — retroemu, wasmcart-native, browser, RetroArch, Knulli handhelds.
+The same `.wasc` runs on any wasmcart host —
+[retroemu](https://github.com/monteslu/retroemu),
+[wasmcart-native](https://github.com/wasmcart/wasmcart-native), browser,
+RetroArch, [Knulli](https://knulli.org) handhelds.
 
 ## Supported APIs
 
 | API | Notes |
 |-----|-------|
 | `canvas.getContext('2d')` | GPU-accelerated via Skia Ganesh GL |
-| `canvas.getContext('webgl2')` | Direct GPU passthrough, Three.js works |
+| `canvas.getContext('webgl2')` | Direct GPU passthrough, [Three.js](https://threejs.org) works |
 | `new AudioContext()` | 16 node types, MP3/WAV/OGG/FLAC/AAC decoding |
 | `navigator.getGamepads()` | 4 players, standard W3C layout |
 | `addEventListener('keydown/keyup')` | Full keyboard with HID mapping |
 | `addEventListener('mousedown/pointermove/...)` | Mouse + pointer events |
 | `fetch('file.json')` | Loads from .wasc assets |
-| `new Image(); img.src = 'sprite.png'` | JPEG/PNG/BMP/GIF via stb_image |
+| `new Image(); img.src = 'sprite.png'` | JPEG/PNG/BMP/GIF via [stb_image](https://github.com/nothings/stb) |
 | `import { x } from './module.js'` | ES modules resolve from .wasc |
 | `requestAnimationFrame` | 60fps game loop |
 | `setTimeout / setInterval` | Timer scheduling |
@@ -82,7 +91,7 @@ Canvas 2D rendering uses Skia's Ganesh GL backend. All drawing happens on the GP
 
 Games with fixed canvas size (e.g. 640x480) automatically scale to fill the host window with letterboxing, like CSS scaling in a browser.
 
-## WebGL2 — Three.js and Beyond
+## WebGL2 — [Three.js](https://threejs.org) and Beyond
 
 WebGL calls go directly to the host GPU. No framebuffer copy. No software rendering.
 
@@ -97,11 +106,11 @@ bash pack_game.sh my_game/ my_game.wasc "My 3D Game"
 
 | Example | Type | Description |
 |---------|------|-------------|
-| `examples/hello_canvas/` | Canvas 2D | Bouncing ball, text, colors |
-| `examples/hello_audio/` | Web Audio | Oscillator tones |
-| `examples/hello_fetch/` | fetch/modules | Asset loading, ES imports |
-| `examples/hello_webgl/` | WebGL2 | Raw GL triangle |
-| `examples/threejs/` | WebGL2 + Audio | Three.js 3D scene — PBR materials, textures, lights, gamepad camera orbit, sound effects |
+| [`examples/hello_canvas/`](examples/hello_canvas) | Canvas 2D | Bouncing ball, text, colors |
+| [`examples/hello_audio/`](examples/hello_audio) | Web Audio | Oscillator tones |
+| [`examples/hello_fetch/`](examples/hello_fetch) | fetch/modules | Asset loading, ES imports |
+| [`examples/hello_webgl/`](examples/hello_webgl) | WebGL2 | Raw GL triangle |
+| [`examples/threejs/`](examples/threejs) | WebGL2 + Audio | Three.js 3D scene — PBR materials, textures, lights, gamepad camera orbit, sound effects |
 
 The `hello_*` examples include ready-to-run `.wasc` files. The Three.js demo includes source + `.wasc`.
 
@@ -119,23 +128,39 @@ bash pack_game.sh /path/to/jsgames/space/ space.wasc "Space Game"
 | Adventure AI | Canvas 2D + drawImage sprites | ~450 |
 | Three.js demo | WebGL2 + Audio | ~1800 |
 
-## Security
+## Runs Everywhere
 
-The game runs in WASM linear memory inside QuickJS. More secure than running the same game in a browser:
+| Host | Context | Canvas 2D | WebGL2 | Status |
+|------|---------|-----------|--------|--------|
+| Browser | WebGL2 | Ganesh GL (GPU) | Direct | Working |
+| Node.js + SDL | [native-gles](https://github.com/monteslu/native-gles) EGL | Ganesh GL (GPU) | Direct | Working |
+| [wasmcart-native](https://github.com/wasmcart/wasmcart-native) | EGL GLES3 | Ganesh GL (GPU) | Direct | Working |
+| RetroArch ([libretro](https://github.com/wasmcart/wasmcart-libretro)) | GLX Core 3.3 | Ganesh GL (GPU) | Direct | Working |
 
-- No real DOM access (XSS impossible)
-- No arbitrary network requests (fetch loads from .wasc only)
-- No filesystem or process access
-- No cookies or cross-origin data
-- Code can't escape the WASM sandbox
+The same `.wasc` file runs on all hosts. Canvas 2D games get GPU acceleration via Skia Ganesh on every platform — including RetroArch's desktop GL Core 3.3 context, which required cart-side shader compatibility and VAO workarounds for Core Profile.
 
-All I/O goes through the wasmcart ABI: pixels out (GPU), audio out (ring buffer), input in (shared memory). See [architecture.md](architecture.md) for detailed security comparison.
+## Security — Safer Than a Browser
+
+The game runs inside QuickJS (JS interpreter) inside WASM (memory sandbox). This is **more secure than running the same game in a browser**:
+
+| Threat | Browser | wasmcart-jsgame |
+|--------|---------|-----------------|
+| XSS | Vulnerable | Impossible — no real DOM |
+| Cookie/token theft | Vulnerable | Impossible — no cookies |
+| Arbitrary network | Same-origin policy (bypassable) | No network — assets from .wasc only |
+| Filesystem access | Blocked by sandbox | Impossible — WASM linear memory only |
+| Code injection | eval/innerHTML | QuickJS eval stays inside WASM sandbox |
+| Supply chain | npm packages have full access | No npm at runtime — all code in .wasc |
+
+Games are isolated like ROM files. You can download a `.wasc` from anyone and run it safely — the game can't steal data, can't phone home, can't escape the sandbox. It can only render pixels and play audio.
+
+See [architecture.md](architecture.md) for full security comparison and feature parity tables.
 
 ## Build the Runtime
 
 Only needed if you're modifying the runtime itself. Game developers just use the pre-built `build/cart.wasm`.
 
-**Prerequisites:** Emscripten SDK, QuickJS (`bash setup_quickjs.sh`), Skia bitcode (`cd ../wasmcart-skia && bash build.sh`), webaudio-node sources
+**Prerequisites:** [Emscripten SDK](https://emscripten.org), [QuickJS](https://bellard.org/quickjs/) (`bash setup_quickjs.sh`), [Skia](https://skia.org) bitcode (`cd ../wasmcart-skia && bash build.sh`), [webaudio-node](https://github.com/monteslu/webaudio-node) sources
 
 ```bash
 bash build.sh          # → build/cart.wasm (~5MB)
