@@ -10,6 +10,22 @@
 | hello_fetch | 1 (solid bg by design) | space3d | 35 |
 | hello_webgl | 47917 | adventure-ai | 233 |
 
+## CORRECTION (verified by reverting each fix in turn)
+
+The Canvas 2D crash was fixed by **the complete Skia archive link (#2)**, not by
+the font-directory change (#1). Proven by reverting fixes one at a time against
+the regression suite: with the font fix reverted AND `STACK_SIZE` reverted to
+the ignored `TOTAL_STACK`, hello_canvas still renders 341 colours.
+
+The font fix is still correct in principle -- scanning `/fonts/`, which nothing
+creates, is wrong -- but it was NOT what unblocked the build, and the commit
+that landed it claims otherwise. ASAN pointed at `skiac_font_collection` because
+that constructor is simply where lazy Skia init happens to touch memory first,
+under a partial link.
+
+Lesson: I confirmed a fix by observing the symptom disappear, without checking
+whether an earlier fix in the same session had already done it.
+
 ## The five bugs this file records
 
 1. **Skia scanned a font directory that does not exist.**
