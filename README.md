@@ -2,7 +2,7 @@
 
 A sandboxed JavaScript game runtime in a 5MB WASM binary. Write a standard browser game — Canvas 2D, WebGL2, Web Audio, ES modules, gamepad — pack it, run it anywhere. Desktop, browser, ARM handheld, [RetroArch](https://www.retroarch.com). No code changes.
 
-**GPU-accelerated Canvas 2D** via [Skia](https://skia.org) Ganesh GL. **Direct WebGL2** passthrough to the host GPU. **Full Web Audio** with 16 node types and 5 audio decoders, via [webaudio-node](https://github.com/monteslu/webaudio-node). **120+ browser API shims** so real games work unmodified.
+**GPU-accelerated Canvas 2D** via [Skia](https://skia.org) Ganesh GL. **Direct WebGL2** passthrough to the host GPU. **Full Web Audio** with 16 node types and 5 audio decoders, via [webaudio-node](https://github.com/monteslu/webaudio-node). **~50 browser API globals** shimmed (plus their methods) so real games work unmodified.
 
 Runs on every [wasmcart](https://github.com/wasmcart/wasmcart) host: Node.js (SDL), browser (WebGL2), [wasmcart-native](https://github.com/wasmcart/wasmcart-native) (EGL), RetroArch ([wasmcart-libretro](https://github.com/wasmcart/wasmcart-libretro)). Same `.wasc` file, same game, everywhere.
 
@@ -81,7 +81,10 @@ RetroArch, [Knulli](https://knulli.org) handhelds.
 | `Worker` | Cooperative (separate QuickJS runtimes) |
 | `WebSocket` | Via wasmcart WS ABI (manifest allowlist) |
 
-120+ additional DOM/browser APIs shimmed (document, window, navigator, Blob, URL, Event, MutationObserver, etc.). See [architecture.md](architecture.md) for the full list.
+~50 browser globals are shimmed (document, window, navigator, Blob, URL, Event,
+MutationObserver, localStorage, performance, screen, crypto, atob/btoa, …), each
+with the methods a game actually reaches for. Counted from `src/cart_main.c`;
+see [architecture.md](architecture.md) for the breakdown.
 
 ## Canvas 2D — GPU Accelerated
 

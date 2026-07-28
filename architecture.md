@@ -235,6 +235,9 @@ src/
   canvas2d_skia.c      — Canvas 2D backed by Skia (CPU raster or Ganesh GL)
   skia_gl_surface.cpp  — Ganesh GL context + ~120 GL wrapper functions
   skia_wasm_fix.cpp    — Text rendering via stb_truetype
+  stb_truetype.h       — vendored single-header (v1.26); skia_wasm_fix.cpp
+                         defines STB_TRUETYPE_IMPLEMENTATION
+  gl_trace.h           — optional GL call tracing for Ganesh debugging
   skia_path_reset.cpp  — Skia path reset helper
   webgl_shim.c         — WebGL2 → wasmcart GL imports (~80 functions)
   audio_shim.c         — Web Audio API → webaudio-node C++ engine
@@ -505,6 +508,32 @@ This lets games that load box2d.wasm via `WebAssembly.instantiate` work without 
 | Memory isolation | Shared browser process | Shared Node.js process | WASM linear memory — separate address space per cart |
 | Code injection | eval/innerHTML/script injection | eval available | QuickJS eval runs inside WASM sandbox — can't escape to host |
 | Supply chain (malicious deps) | npm packages have full browser access | npm packages have full Node.js access | No npm at runtime — all code bundled in .wasc, runs in WASM sandbox |
+
+### What this does NOT protect against: availability
+
+The table above is about *confidentiality and integrity*, and those claims hold.
+It says nothing about **availability**, and a cart can trivially deny it:
+
+```js
+function loop(){ while(true){} }
+requestAnimationFrame(loop);
+```
+
+Three lines, no exotic APIs. `wc_render` never returns and the host hangs with
+it. Verified 2026-07-28: `runFrame` did not return in 25 seconds.
+
+A promise-based variant (`function spin(){Promise.resolve().then(spin);}`) IS
+bounded -- `cart_main.c` caps microtask draining at `MAX_JOB_MS` per frame -- but
+that bound cannot see a synchronous loop, because control never returns to the
+job queue at all.
+
+The mitigation QuickJS provides is `JS_SetInterruptHandler`, which is **not
+currently used**. Wiring it to a per-frame deadline would let the runtime abort
+a game that overruns instead of taking the host down. Until then:
+
+> A malicious cart cannot read your files, reach the network, or escape the
+> sandbox -- but it CAN freeze the process running it. Treat "safe to run
+> untrusted games" as a statement about your data, not about your uptime.
 
 ### Why wasmcart-jsgame is more secure than a browser
 
