@@ -71,17 +71,46 @@ build or a loud error.
 **This fixed a real class of crash.** The 228-byte cart from the bisection below
 now runs 60 frames clean where it previously died on frame 0.
 
-## Still broken: hello_canvas
+## Still broken: hello_canvas — bisected to a draw-call COUNT
 
-`hello_canvas` STILL crashes after the Skia fix, while `hello_audio`,
-`hello_fetch` and the small synthetic carts all pass. So there is a second,
-independent bug -- narrower than the first, and specific to something
-hello_canvas does that the others do not (it is the only example using
-`fillText` + `arc` + `strokeRect` together against the Ganesh GPU path).
+Bisected against the fixed build. Cumulative, one draw call added at a time:
 
-Next step: bisect hello_canvas's own draw calls against the FIXED build, which
-is now a meaningful exercise -- before the Skia fix the results were noise, as
-the "red herring" section explains.
+```
+clearRect                            OK
++ fillRect (background)              OK
++ fillRect (title bar)               OK
++ fillText 20px                      OK
++ arc / fill                         OK
++ strokeRect                         OK
++ fillText 14px                      CRASH   <- frame 0
+```
+
+Then removing calls from that crashing set:
+
+```
+minus arc                            OK
+minus strokeRect                     OK
+minus the FIRST fillText             CRASH   (so not the text)
+minus the title-bar fillRect         OK      <- the one that matters
+```
+
+**It is the SECOND fillRect.** With `arc` + `strokeRect` + `fillText` present,
+one `fillRect` is fine and two crash. Geometry is irrelevant -- 800x40,
+800x100, 800x300, 800x600 and 400x40 all crash identically. So this is not a
+size, coordinate or shape bug.
+
+Also NOT the cause, each tested in isolation and all passing: two `fillText`
+at the same size, two at different sizes, text that changes every frame (200
+frames clean), `arc`+`strokeRect`+`fillText` together without the second
+fillRect, and `clearRect` with or without.
+
+Crashes on **frame 0**, so it is a setup-time fault, not a leak or an
+unbounded cache.
+
+That shape -- a specific COUNT of one primitive tipping it over while
+geometry is irrelevant -- points at a fixed-size buffer or a draw-op batch
+limit in the cart-side Skia wrapper (`src/canvas2d_skia.c`) or in
+`skia_c.cpp`, rather than at Skia itself. That is where to look next.
 
 ## What is left to check
 
