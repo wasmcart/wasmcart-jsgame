@@ -341,6 +341,16 @@ requestAnimationFrame(loop);
   writeFileSync(join(d, 'main.js'), `
 const c=document.getElementById('game'); c.width=64; c.height=64;
 const gl=c.getContext('webgl2');
+/* uniformMatrix4fv used "if (count < 1) count = 1", forcing GL to read a FULL
+ * matrix from a shorter buffer -- up to 60 bytes of adjacent heap uploaded as
+ * a transform. Seed m[0][0]=7, do a short upload, then check it survived.
+ * The shader paints green when the seed is intact, red when it was clobbered. */
+function sh(t,src){const s=gl.createShader(t);gl.shaderSource(s,src);gl.compileShader(s);return s;}
+const _vs=sh(gl.VERTEX_SHADER,'#version 300 es\\nuniform highp mat4 m;\\nvoid main(){gl_Position=vec4(m[0][0]*0.0,0,0,1);gl_PointSize=64.0;}');
+const _fs=sh(gl.FRAGMENT_SHADER,'#version 300 es\\nprecision highp float;\\nuniform highp mat4 m;\\nout vec4 o;\\nvoid main(){o=(m[0][0]==7.0)?vec4(0,1,0,1):vec4(1,0,0,1);}');
+const _p=gl.createProgram();gl.attachShader(_p,_vs);gl.attachShader(_p,_fs);gl.linkProgram(_p);
+const _loc=gl.getUniformLocation(_p,'m');
+const _known=new Float32Array(16); _known[0]=7;
 let n=0;
 function loop(){
   gl.clearColor(1,0,0,1); gl.clear(gl.COLOR_BUFFER_BIT);
@@ -358,6 +368,15 @@ function loop(){
     try { gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,64,64,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array(16));
           R.push('ti_lie:ok'); } catch(e){ R.push('ti_lie:threw'); }
     console.log('GLB ' + R.join(' '));
+    /* Matrix probe: blue would mean nothing drew, so a broken probe cannot pass. */
+    gl.useProgram(_p);
+    gl.uniformMatrix4fv(_loc,false,_known);
+    gl.clearColor(0,0,1,1); gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.uniformMatrix4fv(_loc,false,new Float32Array(1));   // short upload
+    gl.drawArrays(gl.POINTS,0,1);
+    const _px=new Uint8Array(4);
+    gl.readPixels(32,32,1,1,gl.RGBA,gl.UNSIGNED_BYTE,_px);
+    console.log('UM ' + [_px[0],_px[1],_px[2]].join(','));
   }
   requestAnimationFrame(loop);
 }
@@ -380,6 +399,11 @@ requestAnimationFrame(loop);
   ok('GL pixel calls bound to buffer length',
      survived && g === 'rp_ctl:red rp_lie:threw ti_ctl:ok ti_lie:threw',
      survived ? (g || '(none)') : 'runtime died (heap overflow)');
+
+  const um = (cap.find((l) => l.includes('UM ')) ?? '').replace(/^.*UM /, '').trim();
+  const umLabel = um === '0,0,255' ? 'nothing drawn (probe broken)'
+                : um === '0,255,0' ? 'seeded matrix preserved' : `clobbered (${um})`;
+  ok('uniformMatrix4fv ignores short buffers', um === '0,255,0', umLabel);
 }
 
 rmSync(tmp, { recursive: true, force: true });

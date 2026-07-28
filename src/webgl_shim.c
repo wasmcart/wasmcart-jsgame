@@ -706,9 +706,14 @@ static JSValue js_glUniformMatrix4fv(JSContext *ctx, JSValueConst this_val,
     int transpose = JS_ToBool(ctx, argv[1]);
     uint8_t *data; size_t len;
     if (get_typed_array_data(ctx, argv[2], &data, &len)) {
+        /* `if (count < 1) count = 1` forced GL to read one full matrix even
+         * when the buffer held less, over-reading up to 60 bytes. Skip the
+         * call instead: a buffer too short for a single matrix is a caller
+         * bug, and uploading a matrix built from adjacent heap is worse than
+         * uploading nothing. */
         int count = len / (16 * sizeof(float));
-        if (count < 1) count = 1;
-        glUniformMatrix4fv(loc, count, transpose, (const float *)data);
+        if (count >= 1)
+            glUniformMatrix4fv(loc, count, transpose, (const float *)data);
     }
     return JS_UNDEFINED;
 }
@@ -719,9 +724,14 @@ static JSValue js_glUniformMatrix3fv(JSContext *ctx, JSValueConst this_val,
     int transpose = JS_ToBool(ctx, argv[1]);
     uint8_t *data; size_t len;
     if (get_typed_array_data(ctx, argv[2], &data, &len)) {
+        /* `if (count < 1) count = 1` forced GL to read one full matrix even
+         * when the buffer held less, over-reading up to 32 bytes. Skip the
+         * call instead: a buffer too short for a single matrix is a caller
+         * bug, and uploading a matrix built from adjacent heap is worse than
+         * uploading nothing. */
         int count = len / (9 * sizeof(float));
-        if (count < 1) count = 1;
-        glUniformMatrix3fv(loc, count, transpose, (const float *)data);
+        if (count >= 1)
+            glUniformMatrix3fv(loc, count, transpose, (const float *)data);
     }
     return JS_UNDEFINED;
 }
@@ -732,9 +742,14 @@ static JSValue js_glUniformMatrix2fv(JSContext *ctx, JSValueConst this_val,
     int transpose = JS_ToBool(ctx, argv[1]);
     uint8_t *data; size_t len;
     if (get_typed_array_data(ctx, argv[2], &data, &len)) {
+        /* `if (count < 1) count = 1` forced GL to read one full matrix even
+         * when the buffer held less, over-reading up to 12 bytes. Skip the
+         * call instead: a buffer too short for a single matrix is a caller
+         * bug, and uploading a matrix built from adjacent heap is worse than
+         * uploading nothing. */
         int count = len / (4 * sizeof(float));
-        if (count < 1) count = 1;
-        glUniformMatrix2fv(loc, count, transpose, (const float *)data);
+        if (count >= 1)
+            glUniformMatrix2fv(loc, count, transpose, (const float *)data);
     }
     return JS_UNDEFINED;
 }
