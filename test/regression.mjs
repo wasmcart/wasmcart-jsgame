@@ -285,6 +285,19 @@ function loop(){
     try { ctx.putImageData({width:64,height:64,data:tiny},0,0); } catch(e){}
     const lie=colours();
     console.log('PX ctl=' + ctl.n + ':' + ctl.px + ' lie=' + lie.n);
+    // drawImage carried the SAME trust bug: imgW/imgH from JS, buffer length
+    // never checked, so a short buffer painted adjacent heap (538 colours).
+    ctx.fillStyle='#000000'; ctx.fillRect(0,0,64,64);
+    const dreal=new Uint8Array(64*64*4);
+    for(let i=0;i<dreal.length;i+=4){dreal[i+2]=255;dreal[i+3]=255;}
+    _wcC2D.drawImage(dreal,64,64,0,0,64,64,0,0,64,64);
+    const dctl=colours().n;
+    ctx.fillStyle='#000000'; ctx.fillRect(0,0,64,64);
+    const dtiny=new Uint8Array(4); dtiny[0]=255; dtiny[3]=255;
+    let dlie;
+    try { _wcC2D.drawImage(dtiny,64,64,0,0,64,64,0,0,64,64); dlie=colours().n; }
+    catch(e){ dlie='threw'; }
+    console.log('DI ctl=' + dctl + ' lie=' + dlie);
   }
   requestAnimationFrame(loop);
 }
@@ -308,6 +321,12 @@ requestAnimationFrame(loop);
   // ctl: honest put lands as flat blue. lie: short buffer paints NOTHING.
   ok('putImageData rejects short buffers',
      !!m && m[1] === '1' && m[2] === '0,0,255' && m[3] === '1', px || '(none)');
+
+  const di = (cap.find((l) => l.includes('DI ')) ?? '').replace(/^.*DI /, '').trim();
+  const dm = /ctl=(\d+) lie=(.+)/.exec(di);
+  // Honest draw lands flat (1 colour); short buffer must THROW, not paint heap.
+  ok('drawImage rejects short buffers',
+     !!dm && dm[1] === '1' && dm[2] === 'threw', di || '(none)');
 }
 
 rmSync(tmp, { recursive: true, force: true });

@@ -1114,6 +1114,18 @@ static JSValue js_drawImage(JSContext *ctx, JSValueConst t, int argc, JSValueCon
     JS_ToInt32(ctx, &imgH, argv[2]);
     if (imgW <= 0 || imgH <= 0) return JS_UNDEFINED;
 
+    /* Same trust bug putImageData had: imgW/imgH arrive from JS while `len` is
+     * the real buffer size, and skiac_canvas_write_pixels below reads
+     * imgW*imgH*4 regardless. Claiming 64x64 over a 4-byte buffer painted 538
+     * distinct colours of adjacent cart heap onto the canvas.
+     * Check overflow BEFORE the product, then the product against len. */
+    if ((int64_t)imgW * (int64_t)imgH > (int64_t)(INT32_MAX / 4))
+        return JS_ThrowRangeError(ctx, "drawImage dimensions overflow");
+    if ((size_t)imgW * (size_t)imgH * 4 > len)
+        return JS_ThrowRangeError(ctx,
+            "drawImage: data is %u bytes but %dx%d needs %u",
+            (unsigned)len, imgW, imgH, (unsigned)((size_t)imgW * (size_t)imgH * 4));
+
     double sx, sy, sw, sh, dx, dy, dw, dh;
     if (argc >= 11) {
         /* 9-arg form: sx,sy,sw,sh,dx,dy,dw,dh */
