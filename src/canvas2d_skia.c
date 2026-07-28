@@ -1059,10 +1059,26 @@ static JSValue js_putImageData(JSContext *ctx, JSValueConst t, int argc, JSValue
     }
     pixels = buf;
 
+    /* w/h come from JS object properties; `len` is the REAL backing size.
+     * Nothing compared them, so `{width:64, height:64, data:new
+     * Uint8ClampedArray(4)}` had Skia read w*h*4 bytes from a 4-byte
+     * allocation and paint ~16KB of adjacent cart heap onto the canvas --
+     * an out-of-bounds read turned into visible pixels. Verified: 61 distinct
+     * colours out of a one-pixel buffer.
+     *
+     * Reject rather than clamp. A short buffer means the caller's model of the
+     * image is wrong, and drawing a partial band of it would hide that. */
     if (pixels) {
-        skiac_canvas_put_image_data(skia_canvas, w, h, pixels,
-                                     w * 4, w * h * 4,
-                                     dx, dy, 0, 0, w, h, 0, 0);
+        if (w <= 0 || h <= 0) {
+            /* Nothing to draw; not an error per the spec's no-op regions. */
+        } else if ((int64_t)w * (int64_t)h > (int64_t)(INT32_MAX / 4)) {
+            JS_ThrowRangeError(ctx, "putImageData dimensions overflow");
+        } else if ((size_t)w * (size_t)h * 4 > len) {
+        } else {
+            skiac_canvas_put_image_data(skia_canvas, w, h, pixels,
+                                         w * 4, w * h * 4,
+                                         dx, dy, 0, 0, w, h, 0, 0);
+        }
     }
 
     JS_FreeValue(ctx, w_val);
@@ -1262,6 +1278,59 @@ static JSValue js_loadFont(JSContext *ctx, JSValueConst t, int argc, JSValueCons
     return JS_NewUint32(ctx, 0);
 }
 
+/* getImageData — read pixels back off the Skia surface.
+ *
+ * This was MISSING from the registration table, so the JS shim's
+ * `try { _wcC2D.getImageData(...) } catch { ...zero-filled... }` fallback ran
+ * every single time: every getImageData in every game silently returned an
+ * all-black buffer of the right size. Silent, because the shape was correct --
+ * a game reading pixels back could not tell "black canvas" from "unimplemented".
+ *
+ * Bounds are validated here rather than trusted: w/h/x/y arrive from JS. Skia
+ * clips reads to the surface itself, but the OUTPUT buffer is sized from w*h
+ * on this side, so a bogus w*h would be our overflow, not Skia's. */
+static JSValue js_getImageData(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
+    ensure_skia_init();
+    if (argc < 4 || !skia_surface) return JS_NULL;
+
+    int32_t x, y, w, h;
+    if (JS_ToInt32(ctx, &x, argv[0]) || JS_ToInt32(ctx, &y, argv[1]) ||
+        JS_ToInt32(ctx, &w, argv[2]) || JS_ToInt32(ctx, &h, argv[3]))
+        return JS_EXCEPTION;
+
+    /* Reject non-positive, and cap the allocation so w*h*4 cannot wrap int. */
+    if (w <= 0 || h <= 0) return JS_NULL;
+    if (w > 16384 || h > 16384 || (int64_t)w * h > 64 * 1024 * 1024 / 4)
+        return JS_ThrowRangeError(ctx, "getImageData region too large");
+
+    size_t nbytes = (size_t)w * (size_t)h * 4;
+    uint8_t *pixels = (uint8_t *)calloc(1, nbytes);
+    if (!pixels) return JS_ThrowOutOfMemory(ctx);
+
+    /* 0 = sRGB, matching the colour space used elsewhere in this file. */
+    int got = skiac_surface_read_pixels_rect(skia_surface, pixels, x, y, w, h, 0);
+
+    /* On failure the buffer stays zeroed, which matches the old behaviour --
+     * but the read is attempted now, so a real surface yields real pixels. */
+    JSValue ab = JS_NewArrayBufferCopy(ctx, pixels, nbytes);
+    free(pixels);
+    if (JS_IsException(ab)) return ab;
+
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue u8c_ctor = JS_GetPropertyStr(ctx, global, "Uint8ClampedArray");
+    JSValue data = JS_CallConstructor(ctx, u8c_ctor, 1, &ab);
+    JS_FreeValue(ctx, u8c_ctor);
+    JS_FreeValue(ctx, global);
+    JS_FreeValue(ctx, ab);
+
+    JSValue out = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, out, "width", JS_NewInt32(ctx, w));
+    JS_SetPropertyStr(ctx, out, "height", JS_NewInt32(ctx, h));
+    JS_SetPropertyStr(ctx, out, "data", data);
+    JS_SetPropertyStr(ctx, out, "_ok", got ? JS_TRUE : JS_FALSE);
+    return out;
+}
+
 /* ── Registration ────────────────────────────────────────────────── */
 
 void register_canvas2d_native(JSContext *ctx) {
@@ -1297,6 +1366,7 @@ void register_canvas2d_native(JSContext *ctx) {
     REG("setTransform", js_setTransform, 6);
     REG("resetTransform", js_resetTransform, 0);
     REG("putImageData", js_putImageData, 3);
+    REG("getImageData", js_getImageData, 4);
     REG("drawImage", js_drawImage, 11);
     REG("_setFillStyle", js_setFillStyle, 1);
     REG("_setStrokeStyle", js_setStrokeStyle, 1);

@@ -245,6 +245,71 @@ requestAnimationFrame(loop);
   ok('gamepad axes stay in -1..1', lo === -1 && hi === 1, `lo=${lo} hi=${hi}`);
 }
 
+/* ── 9+10. getImageData readback, and putImageData bounds ────────────────────
+ * getImageData was never registered natively, so the JS shim's try/catch
+ * returned a zero-filled buffer of the right SHAPE every time -- every read in
+ * every game silently came back black, indistinguishable from a black canvas.
+ * With readback fixed, the second bug became testable: putImageData trusted
+ * the JS-supplied width/height over the real buffer length, so a 1-pixel
+ * buffer claiming 64x64 made Skia read ~16KB of adjacent cart heap and paint
+ * it on screen (61 distinct colours out of one pixel). */
+{
+  const { mkdirSync, writeFileSync } = await import('node:fs');
+  const d = join(tmp, 'pixels');
+  mkdirSync(d, { recursive: true });
+  writeFileSync(join(d, 'main.js'), `
+const c=document.getElementById('game'); c.width=64; c.height=64;
+const ctx=c.getContext('2d');
+function colours(){
+  const d=ctx.getImageData(0,0,64,64).data, s=new Set();
+  for(let i=0;i<d.length;i+=4) s.add((d[i]<<16)|(d[i+1]<<8)|d[i+2]);
+  return {n:s.size, px:[d[0],d[1],d[2]].join(',')};
+}
+let n=0;
+function loop(){
+  if(++n===20 && !globalThis.p){ globalThis.p=1;
+    ctx.fillStyle='#ff0000'; ctx.fillRect(0,0,64,64);
+    ctx.fillStyle='#00ff00'; ctx.fillRect(0,0,8,8);
+    const rb = ctx.getImageData(0,0,64,64).data;
+    const mid=(32*64+32)*4;
+    console.log('RB ' + [rb[0],rb[1],rb[2]].join(',') + ' ' + [rb[mid],rb[mid+1],rb[mid+2]].join(','));
+    // Honest data must still land.
+    ctx.fillStyle='#000000'; ctx.fillRect(0,0,64,64);
+    const real=new Uint8ClampedArray(64*64*4);
+    for(let i=0;i<real.length;i+=4){real[i+2]=255;real[i+3]=255;}
+    ctx.putImageData({width:64,height:64,data:real},0,0);
+    const ctl=colours();
+    // Lying data must leak nothing.
+    ctx.fillStyle='#000000'; ctx.fillRect(0,0,64,64);
+    const tiny=new Uint8ClampedArray(4); tiny[0]=255; tiny[3]=255;
+    try { ctx.putImageData({width:64,height:64,data:tiny},0,0); } catch(e){}
+    const lie=colours();
+    console.log('PX ctl=' + ctl.n + ':' + ctl.px + ' lie=' + lie.n);
+  }
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+`);
+  const wasc = pack(d, join(tmp, 'pixels.wasc'), 'px');
+  const { gl } = createWebGL2Context(64, 64);
+  const host = new CartHost({});
+  const cap = [];
+  const real = console.error;
+  console.error = (...a) => cap.push(a.join(' '));
+  await host.load(readFileSync(wasc), { glBackend: gl, width: 64, height: 64 });
+  for (let i = 0; i < 30; i++) host.runFrame([]);
+  console.error = real;
+  const rb = (cap.find((l) => l.includes('RB ')) ?? '').replace(/^.*RB /, '').trim();
+  // Green square at the origin, red at the centre -- proves a REAL read, not zeros.
+  ok('getImageData reads back real pixels', rb === '0,255,0 255,0,0', rb || '(none)');
+
+  const px = (cap.find((l) => l.includes('PX ')) ?? '').replace(/^.*PX /, '').trim();
+  const m = /ctl=(\d+):([\d,]+) lie=(\d+)/.exec(px);
+  // ctl: honest put lands as flat blue. lie: short buffer paints NOTHING.
+  ok('putImageData rejects short buffers',
+     !!m && m[1] === '1' && m[2] === '0,0,255' && m[3] === '1', px || '(none)');
+}
+
 rmSync(tmp, { recursive: true, force: true });
 console.log(`\n${pass} passed, ${fail} failed${skip ? `, ${skip} skipped` : ''}`);
 process.exit(fail ? 1 : 0);
