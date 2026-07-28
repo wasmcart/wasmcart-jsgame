@@ -171,6 +171,42 @@ if (!existsSync(join(ROOT, 'build/cart.wasm'))) {
      `3 more frames in ${Date.now() - t1}ms`);
 }
 
+/* ── 7. fetch() 404 response shape (cart_main.c finish_response) ─────────────
+ * A miss used to return a bare {ok:false,status:404} with no body methods, so
+ * `fetch(missing).then(...)` threw "not a function" and `.text()` was absent.
+ * `await fetch(...)` worked, which is why hello_fetch never caught it. */
+{
+  const { mkdirSync, writeFileSync } = await import('node:fs');
+  const d = join(tmp, 'f404');
+  mkdirSync(d, { recursive: true });
+  writeFileSync(join(d, 'main.js'), `
+const c=document.getElementById('game'); c.width=320; c.height=240;
+const ctx=c.getContext('2d');
+globalThis.r = [];
+fetch('does-not-exist.json')
+  .then(res => r.push('then:' + res.ok + ':' + (typeof res.text)))
+  .catch(e => r.push('threw'));
+let n=0;
+function loop(){ if(++n===30 && !globalThis.p){ globalThis.p=1;
+  console.log('F404 ' + JSON.stringify(r)); }
+  ctx.fillStyle='#111'; ctx.fillRect(0,0,320,240); requestAnimationFrame(loop); }
+requestAnimationFrame(loop);
+`);
+  const wasc = pack(d, join(tmp, 'f404.wasc'), 'f');
+  const { gl } = createWebGL2Context(320, 240);
+  const host = new CartHost({});
+  const cap = [];
+  const real = console.error;
+  console.error = (...a) => cap.push(a.join(' '));
+  await host.load(readFileSync(wasc), { glBackend: gl, width: 320, height: 240 });
+  for (let i = 0; i < 60; i++) host.runFrame([]);
+  console.error = real;
+  const line = cap.find((l) => l.includes('F404 ')) ?? '';
+  // Want then:false:function -- .then resolved AND .text() exists on a miss.
+  ok('fetch 404 keeps Response shape', /then:false:function/.test(line),
+     line.replace(/^\[cart\] F404 /, '').slice(0, 40) || '(no output)');
+}
+
 rmSync(tmp, { recursive: true, force: true });
 console.log(`\n${pass} passed, ${fail} failed${skip ? `, ${skip} skipped` : ''}`);
 process.exit(fail ? 1 : 0);

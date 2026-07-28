@@ -1039,6 +1039,39 @@ static void register_gamepad_api(JSContext *ctx) {
  *  fetch API — relative paths → wc_load_asset
  * ══════════════════════════════════════════════════════════════════ */
 
+/*
+ * Give a fetch Response its body methods and wrap it in a Promise.
+ *
+ * Shared by the 200 and 404 paths deliberately: they used to be written out
+ * separately and the 404 one had neither, so `fetch(missing).then(...)` threw
+ * "not a function". Any future field belongs here, once.
+ */
+static JSValue finish_response(JSContext *ctx, JSValue response) {
+    const char *methods_src =
+        "(function(resp) {\n"
+        "  resp.arrayBuffer = function() { return Promise.resolve(this._data); };\n"
+        "  resp.text = function() { return Promise.resolve(this._text); };\n"
+        "  resp.json = function() { return Promise.resolve(JSON.parse(this._text)); };\n"
+        "  resp.blob = function() { return Promise.resolve(new Blob([this._data])); };\n"
+        "})";
+    JSValue setup_fn = JS_Eval(ctx, methods_src, strlen(methods_src),
+                                "<fetch>", JS_EVAL_TYPE_GLOBAL);
+    if (!JS_IsException(setup_fn)) {
+        JS_Call(ctx, setup_fn, JS_UNDEFINED, 1, &response);
+    }
+    JS_FreeValue(ctx, setup_fn);
+
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue promise_ctor = JS_GetPropertyStr(ctx, global, "Promise");
+    JSValue resolve_fn = JS_GetPropertyStr(ctx, promise_ctor, "resolve");
+    JSValue promise = JS_Call(ctx, resolve_fn, promise_ctor, 1, &response);
+    JS_FreeValue(ctx, resolve_fn);
+    JS_FreeValue(ctx, promise_ctor);
+    JS_FreeValue(ctx, global);
+    JS_FreeValue(ctx, response);
+    return promise;
+}
+
 static JSValue js_fetch(JSContext *ctx, JSValueConst this_val,
                          int argc, JSValueConst *argv)
 {
@@ -1059,16 +1092,23 @@ static JSValue js_fetch(JSContext *ctx, JSValueConst this_val,
     JS_FreeCString(ctx, url);
 
     if (!data) {
-        /* Return a rejected-like response (ok: false) */
+        /*
+         * A 404 response must have the SAME SHAPE as a 200 one. It used to
+         * return a bare {ok:false, status:404} with no _data, no _text and no
+         * body methods, so `fetch(missing).then(...)` threw "not a function"
+         * and `.text()` was absent entirely -- a missing asset crashed the game
+         * instead of letting it handle the error. `await fetch(...)` happened
+         * to work, which is why hello_fetch never caught it.
+         *
+         * The dead JS_Call/JS_GetPropertyStr pair that used to sit here also
+         * leaked two JSValues on every miss.
+         */
         JSValue response = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, response, "ok", JS_FALSE);
         JS_SetPropertyStr(ctx, response, "status", JS_NewInt32(ctx, 404));
-        /* Wrap in resolved promise */
-        JSValue promise = JS_Call(ctx,
-            JS_GetPropertyStr(ctx, JS_GetGlobalObject(ctx), "Promise"),
-            JS_UNDEFINED, 0, NULL);
-        /* Simpler: just return the response object, game can check .ok */
-        return response;
+        JS_SetPropertyStr(ctx, response, "_data", JS_NewArrayBufferCopy(ctx, (const uint8_t *)"", 0));
+        JS_SetPropertyStr(ctx, response, "_text", JS_NewStringLen(ctx, "", 0));
+        return finish_response(ctx, response);
     }
 
     /* Build Response-like object */
