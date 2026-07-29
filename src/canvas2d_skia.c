@@ -663,7 +663,20 @@ void skia_flush_to_framebuffer(void) {
                 0, cur_height, cur_width, 0,
                 0, 0, cur_width, cur_height,
                 0x4000, 0x2600);
-            _gl_BindFramebuffer(0x8D40, ganesh_fbo);
+            /* Leave the DEFAULT framebuffer bound, not Ganesh's.
+             *
+             * This blit puts the frame in FBO 0 correctly -- but rebinding
+             * ganesh_fbo here meant that when the host called readPixels to
+             * present the frame, GL_FRAMEBUFFER_BINDING was still FBO 1. The
+             * host read GANESH's target (top-down) instead of the FBO 0 we
+             * had just filled (bottom-up), then applied its own row flip, and
+             * every Canvas2D frame shipped upside down.
+             *
+             * That is why editing the blit's src-Y rect never changed the
+             * output: FBO 0 was always correct and simply never read.
+             * Ganesh rebinds its own target before the next draw
+             * (resetContext + per-op binding), so it does not need us to. */
+            _gl_BindFramebuffer(0x8D40, 0);
             skia_gl_reset_context();
         }
         return;
