@@ -132,10 +132,25 @@ _gl_BlitFramebuffer(
     0, 0, cur_width, cur_height,   // dst
     GL_COLOR_BUFFER_BIT, GL_NEAREST);
 
-// Restore Ganesh's FBO and reset its state tracking
-_gl_BindFramebuffer(GL_FRAMEBUFFER, ganesh_fbo);
+// Leave the DEFAULT framebuffer bound, and reset Ganesh's state tracking.
+// NOT ganesh_fbo: the host presents the frame by calling readPixels, so
+// whatever is bound here is what it reads. Restoring ganesh_fbo made it read
+// Ganesh's top-down target instead of the bottom-up FBO 0 this blit had just
+// filled -- then the host applied its own row flip and every Canvas 2D frame
+// shipped UPSIDE DOWN. Ganesh rebinds its own target before the next draw.
+_gl_BindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
 skia_gl_reset_context();
 ```
+
+That bug (fixed 2026-07-28) is worth remembering for how it hid: FBO 0 was
+correct the entire time and simply never read, so editing the blit's src-Y
+rect above — or flipping Ganesh between `kTopLeft` and `kBottomLeft` surface
+origin — changed nothing observable. Every experiment came back byte-identical
+and looked like "not the cause". What found it was printing
+`gl.getParameter(gl.FRAMEBUFFER_BINDING)` at readback time and seeing FBO 1.
+
+**When edits to a buffer have no effect, check whether anything reads that
+buffer before concluding the edit was wrong.**
 
 ## Skia Build (wasmcart-skia/)
 
@@ -505,7 +520,7 @@ This lets games that load box2d.wasm via `WebAssembly.instantiate` work without 
 | Filesystem access | Blocked by sandbox | Full Node.js fs access | Impossible — WASM linear memory only, assets via wc_load_asset |
 | Process spawning | Blocked by sandbox | Full Node.js child_process | Impossible — no system calls |
 | Cookie/token theft | Vulnerable via JS | N/A | Impossible — no cookies, no document.cookie |
-| Memory isolation | Shared browser process | Shared Node.js process | WASM linear memory — separate address space per cart |
+| Memory isolation | Shared browser process | Shared Node.js process | WASM linear memory — separate address space per cart (but see "bugs in the shim layer" below: the boundary to the *host* held, the shims' own bounds checking did not) |
 | Code injection | eval/innerHTML/script injection | eval available | QuickJS eval runs inside WASM sandbox — can't escape to host |
 | Supply chain (malicious deps) | npm packages have full browser access | npm packages have full Node.js access | No npm at runtime — all code bundled in .wasc, runs in WASM sandbox |
 
@@ -546,6 +561,40 @@ pathological frame does not penalise the rest of the session.
 > Residual caveat: a cart CAN still burn up to 2 seconds per frame before being
 > interrupted, so a hostile cart can make the host stutter badly even though it
 > can no longer freeze it outright.
+
+### What this does NOT protect against: bugs in the shim layer itself
+
+The WASM sandbox bounds what a cart can reach *outside* linear memory, and that
+boundary held. It says nothing about what the shims do *inside* it, and on
+2026-07-28 five bindings got that wrong in the same way: they took a buffer and
+a separate width/height from JS, then trusted the dimensions over the buffer's
+real length.
+
+```js
+// Before the fix: read ~16KB past a 4-byte allocation and PAINT IT ON SCREEN.
+ctx.putImageData({ width: 64, height: 64, data: new Uint8ClampedArray(4) }, 0, 0)
+```
+
+Measured: 61 distinct colours of adjacent cart heap rendered as visible pixels.
+`drawImage` was the same (538 colours), as were `texImage2D` and
+`texSubImage2D`. `readPixels` was worse — GL *writes* there, so a short buffer
+was an out-of-bounds write that killed the runtime outright.
+
+None of these escape the WASM sandbox. A cart still cannot reach the host. But
+"can read whatever else is in its own heap and display it" is a real weakening
+of the isolation this runtime promises, and it was reachable from ordinary cart
+JS with no exotic setup.
+
+All five now compute the required byte count, guard the multiplication against
+overflow, and reject a short buffer with a RangeError naming both sizes.
+`uniformMatrixNfv` had a narrower version of the same bug (`if (count < 1)
+count = 1` forced a full-matrix read from a shorter buffer) and now skips
+instead.
+
+The lesson generalises: **any binding taking a buffer plus separate dimensions
+is suspect until it compares them.** They are checked in
+`test/regression.mjs`, and each check was confirmed to go red with its fix
+reverted.
 
 ### Why wasmcart-jsgame is more secure than a browser
 

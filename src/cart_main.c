@@ -1573,7 +1573,12 @@ static void register_canvas_api(JSContext *ctx) {
 }
 
 /* ══════════════════════════════════════════════════════════════════
- *  localStorage shim — backed by wasmcart save data
+ *  localStorage shim — IN-MEMORY ONLY, not persisted.
+ *
+ * The comment here used to claim "backed by wasmcart save data". It is not:
+ * _data is a plain object, so everything written is lost when the cart exits.
+ * Games that expect saves to survive a restart silently lose them. Wiring this
+ * to the wasmcart save ABI is real work and is not done.
  * ══════════════════════════════════════════════════════════════════ */
 
 static void register_localstorage_api(JSContext *ctx) {

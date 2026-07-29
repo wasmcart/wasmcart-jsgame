@@ -5,10 +5,21 @@
 
 | example | colours | example | colours |
 |---|---|---|---|
-| hello_audio | 572 | threejs | 4971 |
-| hello_canvas | 339 (text renders) | space | 500 |
-| hello_fetch | 1 (solid bg by design) | space3d | 35 |
-| hello_webgl | 47917 | adventure-ai | 233 |
+| hello_audio | 569 | threejs | 5039 |
+| hello_canvas | 340 (text renders) | space | 537 |
+| hello_fetch | 1 (solid bg by design) | space3d | 208 |
+| hello_webgl | 47902 | adventure-ai | 28 |
+
+These counts are a **liveness signal, not a fixture**. They are sampled at a
+particular animation frame and drift between runs — space3d has read anywhere
+from 35 to 262 depending on where its nebulae are. Treat `> 1` as "it drew";
+only `1` (or an error) is a real failure. `hello_fetch` legitimately reads 1
+because it has no draw calls at all.
+
+Colour counts also cannot see orientation: every one of these was identical
+while all 2D frames shipped upside down. Look at the PNG, not the number —
+`node ../wasmcart/bin/wasmcart-play.js examples/hello_canvas/hello_canvas.wasc
+--frames 60 --shot /tmp/x.png`.
 
 ## CORRECTION (verified by reverting each fix in turn)
 
@@ -25,6 +36,45 @@ under a partial link.
 
 Lesson: I confirmed a fix by observing the symptom disappear, without checking
 whether an earlier fix in the same session had already done it.
+
+## Two more build bugs, 2026-07-28 (later session)
+
+**`worker_shim.o` was compiled and never linked.** `build.sh` built it, then
+the `OBJS` list didn't mention it, so the entire Worker implementation was
+absent from `cart.wasm` and `new Worker(...)` threw `_wcWorkerCreate is not
+defined`. `-sERROR_ON_UNDEFINED_SYMBOLS=0` is required for the Skia/GL stubs,
+so an orphaned object produces no diagnostic at all. Audit with:
+
+```bash
+for o in obj/*.o; do
+  grep -q "$(basename $o)" <<<"$(grep '^OBJS=' -A10 build.sh)" || echo "ORPHAN: $o"
+done
+# the three skia_*.o arrive via $SKIA_FIX/$SKIA_GL and are expected
+```
+
+**QuickJS lived in `/tmp/quickjs`.** Both `build.sh` and `setup_quickjs.sh`
+pointed there, so a reboot silently deleted the JS engine source and left the
+tree unbuildable with only "QuickJS not found" to go on. Now defaults to
+`vendor/quickjs` (gitignored), overridable via `QUICKJS_DIR`/`QUICKJS_SRC`.
+`setup_quickjs.sh` also referenced `$HERE` without defining it, which the old
+absolute path had masked.
+
+## A third trap: the packed `.wasc` is a second staleness layer
+
+A `.wasc` embeds `cart.wasm`. Rebuilding the runtime does **nothing** to an
+already-packed cart, so `bash build.sh && node run-my-probe.js` can test a cart
+from an hour ago. This produced three separate false conclusions in one session,
+including "the blit arrives un-flipped" and "`skia_flush_to_framebuffer` is
+never called" — both of which reversed after repacking.
+
+Before trusting any negative result, confirm the string you just added is
+actually in the binary *and* in the cart:
+
+```bash
+strings build/cart.wasm | grep -c "MY_NEW_LOG_STRING"
+python3 -c "import zipfile;z=zipfile.ZipFile('x.wasc');print([i.file_size for i in z.infolist() if i.filename=='cart.wasm'])"
+stat -c%s build/cart.wasm    # must match the number above
+```
 
 ## The five bugs this file records
 

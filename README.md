@@ -78,8 +78,12 @@ RetroArch, [Knulli](https://knulli.org) handhelds.
 | `console.log` | Outputs to host terminal |
 | `crypto.getRandomValues` | RNG for game IDs |
 | `atob / btoa` | Base64 encode/decode |
-| `Worker` | Cooperative (separate QuickJS runtimes) |
+| `Worker` | Cooperative (separate QuickJS runtimes), JSON message passing |
 | `WebSocket` | Via wasmcart WS ABI (manifest allowlist) |
+
+`localStorage` is **in-memory only** — writes do not survive a restart. Wiring
+it to the wasmcart save ABI is not done yet, so don't ship a game that expects
+saves to persist.
 
 ~50 browser globals are shimmed (document, window, navigator, Blob, URL, Event,
 MutationObserver, localStorage, performance, screen, crypto, atob/btoa, …), each
@@ -90,7 +94,11 @@ see [architecture.md](architecture.md) for the breakdown.
 
 Canvas 2D rendering uses Skia's Ganesh GL backend. All drawing happens on the GPU with zero CPU pixel copies. Direct FBO blit to display.
 
-**Implemented:** fillRect, clearRect, strokeRect, fillText, strokeText, measureText, drawImage (3/5/9-arg), beginPath, closePath, moveTo, lineTo, arc, arcTo, quadraticCurveTo, bezierCurveTo, rect, fill, stroke, clip, save, restore, translate, rotate, scale, setTransform, resetTransform, putImageData, getImageData, createLinearGradient, createRadialGradient
+**Implemented:** fillRect, clearRect, strokeRect, fillText, strokeText, measureText, drawImage (3/5/9-arg), beginPath, closePath, moveTo, lineTo, arc, arcTo, quadraticCurveTo, bezierCurveTo, rect, roundRect, ellipse, fill, stroke, clip, save, restore, translate, rotate, scale, setTransform, resetTransform, getTransform, setLineDash, getLineDash, isPointInPath, isPointInStroke, putImageData, getImageData, createImageData, createLinearGradient, createRadialGradient, createConicGradient, createPattern
+
+`putImageData`, `drawImage` and `getImageData` validate the pixel buffer
+against the width/height you pass. A buffer shorter than `w * h * 4` throws a
+RangeError naming both sizes rather than reading past the end of it.
 
 Games with fixed canvas size (e.g. 640x480) automatically scale to fill the host window with letterboxing, like CSS scaling in a browser.
 
@@ -158,6 +166,36 @@ The game runs inside QuickJS (JS interpreter) inside WASM (memory sandbox). This
 Games are isolated like ROM files. You can download a `.wasc` from anyone and run it safely — the game can't steal data, can't phone home, can't escape the sandbox. It can only render pixels and play audio.
 
 See [architecture.md](architecture.md) for full security comparison and feature parity tables.
+
+## Testing
+
+```bash
+node test/regression.mjs        # 17 checks, ~8s (needs build/cart.wasm)
+```
+
+Every check maps to one fixed bug. They exist because this class of failure is
+almost impossible to diagnose twice: a corrupted QuickJS heap, an unlinked
+object file, and an out-of-bounds write all surface as the same bare
+`memory access out of bounds`, with nothing pointing at the cause.
+
+Each one was verified in **both** directions — the fix reverted, rebuilt, and
+the check confirmed to go red. A check that has never failed is not known to
+work.
+
+Two conventions worth keeping if you add to it:
+
+- **Don't validate rendering with an in-process GL readback.** Sixteen checks
+  read pixels back through the same GL path the cart draws into, so a
+  whole-frame vertical flip cancelled out and every one stayed green while
+  every 2D frame shipped upside down. The orientation check goes through the
+  shipped player and decodes the PNG instead.
+- **Assert the probe can move.** More than one "bug found" here was a broken
+  harness — a probe that embedded empty base64, a shader that failed to link,
+  a stale `.wasc`. Pair every hostile case with an honest control that must
+  visibly succeed, and give the probe a sentinel value for "nothing drew".
+
+The suite needs `../wasmcart` for the host and picks up `../jsgames` if present
+(one check packs `space`, and skips cleanly if it isn't there).
 
 ## Build the Runtime
 
