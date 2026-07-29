@@ -72,7 +72,7 @@ RetroArch, [Knulli](https://knulli.org) handhelds.
 | `requestAnimationFrame` | 60fps game loop |
 | `setTimeout / setInterval` | Timer scheduling |
 | `performance.now() / Date.now()` | High-resolution timing |
-| `localStorage` | In-memory (persistent save planned) |
+| `localStorage` | Persists via wasmcart save region (64KB, host-owned) |
 | `new FontFace(...)` | TrueType fonts from assets |
 | `ctx.drawImage(img, sx,sy,sw,sh, dx,dy,dw,dh)` | Full 9-arg sprite sheet support |
 | `console.log` | Outputs to host terminal |
@@ -81,9 +81,13 @@ RetroArch, [Knulli](https://knulli.org) handhelds.
 | `Worker` | Cooperative (separate QuickJS runtimes), JSON message passing |
 | `WebSocket` | Via wasmcart WS ABI (manifest allowlist) |
 
-`localStorage` is **in-memory only** — writes do not survive a restart. Wiring
-it to the wasmcart save ABI is not done yet, so don't ship a game that expects
-saves to persist.
+`localStorage` **persists**, backed by the wasmcart save region
+(`wc_info_t.save_ptr`/`save_size`). The host loads any existing bytes before
+`wc_init` and reads them back to store however it likes — the CLI player keeps
+a `.sav` next to the cart. Budget is 64KB; exceeding it throws a real
+`QuotaExceededError` and leaves the existing store untouched rather than
+truncating it. A corrupt or foreign save is detected and ignored, so a bad
+`.sav` starts the game fresh instead of bricking it.
 
 ~50 browser globals are shimmed (document, window, navigator, Blob, URL, Event,
 MutationObserver, localStorage, performance, screen, crypto, atob/btoa, …), each

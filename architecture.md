@@ -232,7 +232,7 @@ All shims are inline JS strings evaluated during `wc_init`:
 - **DOM:** document, window, navigator, screen, location, history
 - **Events:** Event, CustomEvent, PointerEvent, TouchEvent, WheelEvent, EventTarget
 - **Timing:** setTimeout, setInterval, requestAnimationFrame, requestIdleCallback, performance.now, Date.now
-- **Storage:** localStorage, sessionStorage (in-memory)
+- **Storage:** localStorage (persisted via the wasmcart save region), sessionStorage
 - **Network:** fetch (via wc_load_asset), XMLHttpRequest, WebSocket (wasmcart WS ABI)
 - **Data:** Blob, URL, TextEncoder, TextDecoder, DOMParser, FormData
 - **Observers:** MutationObserver, ResizeObserver, IntersectionObserver (stubs)
@@ -275,7 +275,7 @@ pack_game.sh           — Pack JS game + cart.wasm into .wasc archive
 | Keyboard | SDL keyboard events | wc_keys bitmask | Same |
 | Gamepad | gamepad-node + SDL | wc_pads shared memory | Same |
 | FontFace | GlobalFonts (FreeType) | stb_truetype | Different backend, same API |
-| localStorage | lowdb (file-backed) | In-memory Map | Reduced — no persistence yet |
+| localStorage | lowdb (file-backed) | wasmcart save region (64KB) | Persists; host owns storage |
 | Web Assembly | Node.js WASM | Not exposed to games | Missing |
 | Web Workers | Node.js worker_threads | Cooperative (same thread) | Reduced — not parallel |
 | WebSockets | ws package | Shim (wasmcart WS ABI) | Reduced — needs host manifest |
@@ -346,8 +346,16 @@ pack_game.sh           — Pack JS game + cart.wasm into .wasc archive
 | fetch | Native | fs.readFile | wc_load_asset from .wasc | Local assets only |
 | Image (src loading) | Native | @napi-rs/canvas | fetch + stb_image | Async load + decode |
 | FontFace | Native | GlobalFonts | fetch + stb_truetype register | |
-| localStorage | Native | lowdb / file | In-memory Map | Save ABI planned |
-| sessionStorage | Native | N/A | Alias to localStorage | |
+| localStorage | Native | lowdb / file | wasmcart save region | 64KB, host-persisted |
+| sessionStorage | Native | N/A | Alias to localStorage | **Also persists** — see note below |
+
+> **sessionStorage caveat.** It is a plain alias to `localStorage`
+> (`globalThis.sessionStorage = globalThis.localStorage`), so now that
+> localStorage is backed by the save region, sessionStorage persists across
+> runs too. Per the web spec it should be cleared per session. A game using it
+> as scratch space that expects a clean slate on restart will not get one.
+> Kept as-is rather than split, because a separate non-persisted store is easy
+> but nothing currently needs it -- worth fixing if a real game trips on it.
 | performance.now | Native | Node.js | wc_time.time_ms | Wasmcart time source |
 | Date.now | Native | Node.js | Overridden to use performance.now | QuickJS built-in returns 0 in WASM |
 | console.log | Native | Node.js | wc_log | |

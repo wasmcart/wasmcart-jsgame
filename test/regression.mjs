@@ -569,6 +569,67 @@ requestAnimationFrame(loop);
   }
 }
 
+/* ── 18. localStorage persists across runs (wasmcart SRAM) ──────────────────
+ * localStorage used to be a bare JS object, so every save was silently lost on
+ * exit while the API looked like it worked. It is now backed by the spec's
+ * save region (wc_info_t.save_ptr/save_size), which the host loads before
+ * wc_init and reads back to persist.
+ *
+ * Runs the cart THREE times in separate CartHost instances, passing the save
+ * blob between them exactly as bin/play-window.js does with a .sav file. A
+ * counter that reads 1,2,3 proves real persistence; 1,1,1 means it regressed
+ * to in-memory. Also checks the quota path, because refusing a too-big write
+ * must leave the store untouched rather than half-applied. */
+{
+  const { mkdirSync, writeFileSync } = await import('node:fs');
+  const d = join(tmp, 'sram');
+  mkdirSync(d, { recursive: true });
+  writeFileSync(join(d, 'main.js'), `
+const c=document.getElementById('game'); c.width=64; c.height=64;
+const ctx=c.getContext('2d');
+let n=0;
+function loop(){
+  ctx.fillStyle='#111'; ctx.fillRect(0,0,64,64);
+  if(++n===10 && !globalThis.p){ globalThis.p=1;
+    const prev=localStorage.getItem('runs');
+    const runs=prev===null?1:(parseInt(prev,10)+1);
+    localStorage.setItem('runs', runs);
+    let quota='no-throw';
+    try { localStorage.setItem('big','x'.repeat(100*1024)); }
+    catch(e){ quota=e.name; }
+    console.log('SRAM run=' + runs + ' quota=' + quota +
+                ' intact=' + localStorage.getItem('big'));
+  }
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+`);
+  const wasc = pack(d, join(tmp, 'sram.wasc'), 'sr');
+  const runs = [];
+  let blob = null;
+  for (let r = 0; r < 3; r++) {
+    const { gl } = createWebGL2Context(64, 64);
+    const host = new CartHost({});
+    const cap = [];
+    const real = console.error;
+    console.error = (...a) => cap.push(a.join(' '));
+    const opts = { glBackend: gl, width: 64, height: 64 };
+    if (blob) opts.saveData = blob;
+    await host.load(readFileSync(wasc), opts);
+    for (let i = 0; i < 20; i++) host.runFrame([]);
+    console.error = real;
+    runs.push((cap.find((l) => l.includes('SRAM ')) ?? '').replace(/^.*SRAM /, '').trim());
+    const s = host.getSaveData();
+    if (s && s.some((b) => b !== 0)) blob = s;
+    host.destroy();
+  }
+  const counters = runs.map((r) => (/run=(\d+)/.exec(r) ?? [])[1]).join(',');
+  const quotaOk = runs[0].includes('quota=QuotaExceededError') && runs[0].includes('intact=null');
+  ok('localStorage persists across runs (SRAM)',
+     counters === '1,2,3' && quotaOk,
+     `runs=${counters}${quotaOk ? '' : ' QUOTA: ' + runs[0]}`);
+}
+
 rmSync(tmp, { recursive: true, force: true });
 console.log(`\n${pass} passed, ${fail} failed${skip ? `, ${skip} skipped` : ''}`);
 process.exit(fail ? 1 : 0);

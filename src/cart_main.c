@@ -47,6 +47,31 @@ uint32_t cur_height = DEFAULT_HEIGHT;
 
 /* Non-static: shared with webgl_shim.c, canvas2d.c, audio_shim.c */
 uint32_t            framebuffer[MAX_WIDTH * MAX_HEIGHT];
+
+/* ── localStorage backing store (wasmcart SRAM) ──────────────────────
+ *
+ * The spec's save region: a plain byte blob the HOST owns. It loads any
+ * existing bytes here before wc_init() and reads them back to persist after
+ * frames, so the cart never touches a filesystem. Before this existed,
+ * localStorage was a bare JS object and every save was lost on exit.
+ *
+ * Format is a length-prefixed blob so a partially-written or truncated region
+ * is detectable rather than silently parsed as garbage:
+ *
+ *   [0..3]  magic 'W','C','L','S'
+ *   [4..7]  uint32 payload length (little endian)
+ *   [8..]   payload: JSON object of the localStorage key/value map
+ *
+ * 64KB is the whole budget. It is copied into wasm memory by the host at load
+ * and read back wholesale, so this is a real cost, not a reservation --
+ * keep it modest. */
+#define SAVE_MAGIC0 'W'
+#define SAVE_MAGIC1 'C'
+#define SAVE_MAGIC2 'L'
+#define SAVE_MAGIC3 'S'
+#define SAVE_SIZE   (64 * 1024)
+#define SAVE_HEADER 8
+static uint8_t save_region[SAVE_SIZE];
 float               audio_ring[AUDIO_CAP * 2];
 uint32_t            audio_write_cursor;
 wc_pad_t            pads[4];
@@ -136,8 +161,8 @@ wc_info_t *wc_get_info(void) {
     info.audio_cap       = AUDIO_CAP;
     info.audio_write_ptr = (uint32_t)(uintptr_t)&audio_write_cursor;
     info.input_ptr       = (uint32_t)(uintptr_t)pads;
-    info.save_ptr        = 0;
-    info.save_size       = 0;
+    info.save_ptr        = (uint32_t)(uintptr_t)save_region;
+    info.save_size       = SAVE_SIZE;
     info.time_ptr        = (uint32_t)(uintptr_t)&time_info;
     info.host_info_ptr   = (uint32_t)(uintptr_t)&host_info;
     info.flags           = WC_FLAG_AUDIO_F32 | WC_FLAG_POINTER | WC_FLAG_KEYBOARD ;
@@ -1581,17 +1606,110 @@ static void register_canvas_api(JSContext *ctx) {
  * to the wasmcart save ABI is real work and is not done.
  * ══════════════════════════════════════════════════════════════════ */
 
+/* Read the save region back out as a JSON string, or "" if empty/invalid. */
+static JSValue js_save_read(JSContext *c, JSValueConst this_val,
+                             int argc, JSValueConst *argv) {
+    (void)this_val; (void)argc; (void)argv;
+    if (save_region[0] != SAVE_MAGIC0 || save_region[1] != SAVE_MAGIC1 ||
+        save_region[2] != SAVE_MAGIC2 || save_region[3] != SAVE_MAGIC3)
+        return JS_NewString(c, "");          /* first run, or foreign bytes */
+
+    uint32_t len = (uint32_t)save_region[4]        |
+                   ((uint32_t)save_region[5] << 8) |
+                   ((uint32_t)save_region[6] << 16)|
+                   ((uint32_t)save_region[7] << 24);
+    /* A truncated or hostile length must not read past the region. */
+    if (len == 0 || len > SAVE_SIZE - SAVE_HEADER)
+        return JS_NewString(c, "");
+    return JS_NewStringLen(c, (const char *)(save_region + SAVE_HEADER), len);
+}
+
+/* Serialize a JSON string into the save region. Returns 0 if it does not fit,
+ * so the JS side can surface a real QuotaExceededError instead of truncating
+ * a save into corruption. */
+static JSValue js_save_write(JSContext *c, JSValueConst this_val,
+                              int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 1) return JS_NewInt32(c, 0);
+    size_t len = 0;
+    const char *json = JS_ToCStringLen(c, &len, argv[0]);
+    if (!json) return JS_NewInt32(c, 0);
+
+    if (len > SAVE_SIZE - SAVE_HEADER) {      /* refuse rather than truncate */
+        JS_FreeCString(c, json);
+        return JS_NewInt32(c, 0);
+    }
+    save_region[0] = SAVE_MAGIC0; save_region[1] = SAVE_MAGIC1;
+    save_region[2] = SAVE_MAGIC2; save_region[3] = SAVE_MAGIC3;
+    save_region[4] = (uint8_t)(len & 0xff);
+    save_region[5] = (uint8_t)((len >> 8) & 0xff);
+    save_region[6] = (uint8_t)((len >> 16) & 0xff);
+    save_region[7] = (uint8_t)((len >> 24) & 0xff);
+    memcpy(save_region + SAVE_HEADER, json, len);
+    /* Zero the tail: the host persists the WHOLE region, and leaving a longer
+     * previous save behind it would ship stale bytes in every .sav file. */
+    if (SAVE_HEADER + len < SAVE_SIZE)
+        memset(save_region + SAVE_HEADER + len, 0, SAVE_SIZE - SAVE_HEADER - len);
+    JS_FreeCString(c, json);
+    return JS_NewInt32(c, 1);
+}
+
 static void register_localstorage_api(JSContext *ctx) {
+    JSValue global = JS_GetGlobalObject(ctx);
+    JS_SetPropertyStr(ctx, global, "_wcSaveRead",
+        JS_NewCFunction(ctx, js_save_read, "_wcSaveRead", 0));
+    JS_SetPropertyStr(ctx, global, "_wcSaveWrite",
+        JS_NewCFunction(ctx, js_save_write, "_wcSaveWrite", 1));
+    JS_FreeValue(ctx, global);
+
+    /* Backed by the wasmcart save region, so writes survive a restart.
+     * Every mutation flushes immediately: there is no beforeunload in a cart,
+     * and the host may read the region at any frame boundary, so deferring
+     * would lose the last writes on a hard quit. Saves are small and games
+     * write them rarely, so the JSON round-trip per setItem is not worth
+     * optimising until something measures it. */
     const char *src =
-        "globalThis.localStorage = {\n"
-        "  _data: {},\n"
-        "  getItem(key) { return this._data[key] !== undefined ? this._data[key] : null; },\n"
-        "  setItem(key, value) { this._data[key] = String(value); },\n"
-        "  removeItem(key) { delete this._data[key]; },\n"
-        "  clear() { this._data = {}; },\n"
-        "  get length() { return Object.keys(this._data).length; },\n"
-        "  key(i) { return Object.keys(this._data)[i] || null; }\n"
-        "};\n";
+        "globalThis.localStorage = (function () {\n"
+        "  let data = {};\n"
+        "  try {\n"
+        "    const raw = _wcSaveRead();\n"
+        "    if (raw) {\n"
+        "      const parsed = JSON.parse(raw);\n"
+        "      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {\n"
+        "        for (const k of Object.keys(parsed)) data[k] = String(parsed[k]);\n"
+        "      }\n"
+        "    }\n"
+        "  } catch (e) { data = {}; }   /* corrupt save must not brick the game */\n"
+        "  function flush(next) {\n"
+        "    const json = JSON.stringify(next);\n"
+        "    if (!_wcSaveWrite(json)) {\n"
+        "      const err = new Error('localStorage quota exceeded');\n"
+        "      err.name = 'QuotaExceededError';\n"
+        "      throw err;\n"
+        "    }\n"
+        "    data = next;\n"
+        "  }\n"
+        "  return {\n"
+        "    getItem(key) { const k = String(key);\n"
+        "      return Object.prototype.hasOwnProperty.call(data, k) ? data[k] : null; },\n"
+        "    setItem(key, value) {\n"
+        "      /* Build the next state first: if it does not fit, flush throws\n"
+        "       * and `data` is left exactly as it was, rather than half-applied. */\n"
+        "      const next = Object.assign({}, data);\n"
+        "      next[String(key)] = String(value);\n"
+        "      flush(next);\n"
+        "    },\n"
+        "    removeItem(key) {\n"
+        "      const next = Object.assign({}, data);\n"
+        "      delete next[String(key)];\n"
+        "      flush(next);\n"
+        "    },\n"
+        "    clear() { flush({}); },\n"
+        "    get length() { return Object.keys(data).length; },\n"
+        "    key(i) { const ks = Object.keys(data);\n"
+        "      return (i >= 0 && i < ks.length) ? ks[i] : null; }\n"
+        "  };\n"
+        "})();\n";
     JS_Eval(ctx, src, strlen(src), "<localStorage>", JS_EVAL_TYPE_GLOBAL);
 }
 
