@@ -234,3 +234,11 @@ See [architecture.md](architecture.md) for:
 - Security model comparison
 - Native library integration (WASM-in-WASM problem)
 - Upcoming networking API (wc_fetch)
+
+## License
+
+MIT, see [LICENSE](LICENSE).
+
+A built cart statically links QuickJS (MIT), Skia (BSD-3-Clause) and
+webaudio-node (ISC). All are permissive, and their terms are recorded in
+[THIRD-PARTY.md](THIRD-PARTY.md).
