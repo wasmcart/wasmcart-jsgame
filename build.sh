@@ -37,6 +37,8 @@ mkdir -p build obj
 echo "=== Compiling QuickJS ==="
 
 QUICKJS_CFLAGS="-O2 -DCONFIG_VERSION=\"2024\" \
+    `# keep the builder's absolute paths out of the wasm -- see CART_CFLAGS` \
+    -ffile-prefix-map=$QUICKJS_SRC=quickjs \
     -D_GNU_SOURCE \
     -DEMSCRIPTEN \
     -Wno-implicit-function-declaration \
@@ -62,7 +64,16 @@ echo "  QuickJS compiled"
 
 # ── Step 2: Compile cart shim + stubs ────────────────────────────
 
-CART_CFLAGS="-O2 -I$QUICKJS_SRC -I$(dirname $WASMCART_H) -I$PORTING/include"
+# -ffile-prefix-map keeps the BUILDER'S absolute paths out of the shipped
+# binary. assert() and __FILE__ bake the full source path into cart.wasm, so
+# without this every .wasc published from this tree leaks a local directory
+# layout (/home/<user>/code/...). Maps to short logical roots instead, which
+# also makes the wasm byte-identical across machines.
+CART_CFLAGS="-O2 -I$QUICKJS_SRC -I$(dirname $WASMCART_H) -I$PORTING/include \
+  -ffile-prefix-map=$QUICKJS_SRC=quickjs \
+  -ffile-prefix-map=$HERE/../webaudio-node=webaudio-node \
+  -ffile-prefix-map=$PORTING=porting \
+  -ffile-prefix-map=$HERE=."
 
 echo "=== Compiling cart main ==="
 emcc $CART_CFLAGS -c src/cart_main.c -o obj/cart_main.o

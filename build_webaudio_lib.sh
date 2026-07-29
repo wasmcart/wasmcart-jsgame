@@ -22,6 +22,10 @@ fi
 mkdir -p obj/webaudio
 
 CXXFLAGS="-O2 -std=c++17 -msimd128 -msse -msse2 \
+    `# assert()/__FILE__ bake absolute source paths into the shipped wasm;` \
+    `# map them to a short logical root so published carts do not leak the` \
+    `# builder's home directory layout.` \
+    -ffile-prefix-map=$WA_SRC/..=webaudio-node \
     -D__i386__ -DDR_MP3_FLOAT_OUTPUT -DDR_MP3_ONLY_SIMD \
     -Wno-narrowing -Wno-deprecated-declarations \
     -I$WA_SRC/.. -I$WA_SRC/../vendor \
