@@ -21,8 +21,15 @@ source "$EMSDK_ROOT/emsdk_env.sh" 2>/dev/null || true
 # QuickJS lives in the repo, NOT /tmp: /tmp wipes on reboot and took the whole
 # JS engine source with it. Override with QUICKJS_SRC=/path for a shared checkout.
 QUICKJS_SRC="${QUICKJS_SRC:-$HERE/vendor/quickjs}"
-WASMCART_H="$HERE/../wasmcart-examples/hello/wasmcart.h"
-PORTING="$HERE/../wasmcart/porting"
+# The ABI header comes from a wasmcart checkout's include/ (WASMCART_REPO
+# overrides; default sibling). It used to be read out of wasmcart-examples'
+# hello cart -- a copy of a copy that happened to be current.
+WASMCART_REPO="${WASMCART_REPO:-$HERE/../wasmcart}"
+WASMCART_H="$WASMCART_REPO/include/wasmcart.h"
+if [ ! -f "$WASMCART_H" ]; then
+    echo "wasmcart ABI header not found at $WASMCART_H (set WASMCART_REPO)"
+    exit 1
+fi
 
 if [ ! -f "$QUICKJS_SRC/quickjs.c" ]; then
     echo "QuickJS not found at $QUICKJS_SRC"
@@ -69,10 +76,9 @@ echo "  QuickJS compiled"
 # without this every .wasc published from this tree leaks a local directory
 # layout (/home/<user>/code/...). Maps to short logical roots instead, which
 # also makes the wasm byte-identical across machines.
-CART_CFLAGS="-O2 -I$QUICKJS_SRC -I$(dirname $WASMCART_H) -I$PORTING/include \
+CART_CFLAGS="-O2 -I$QUICKJS_SRC -I$(dirname $WASMCART_H) \
   -ffile-prefix-map=$QUICKJS_SRC=quickjs \
   -ffile-prefix-map=$HERE/../webaudio-node=webaudio-node \
-  -ffile-prefix-map=$PORTING=porting \
   -ffile-prefix-map=$HERE=."
 
 echo "=== Compiling cart main ==="
@@ -88,8 +94,8 @@ if [ -f "$SKIA_DIR/libskia.a" ]; then
     SKIA_CFLAGS="$CART_CFLAGS -I$SKIA_DIR/include -I$HERE/../napi-canvas/skia"
     emcc $SKIA_CFLAGS -c src/canvas2d_skia.c -o obj/canvas2d.o
     WASMCART_H_DIR="$(dirname $WASMCART_H)"
-    SKIA_CXX="-O2 -std=c++20 -fno-exceptions -fno-rtti -DSK_RELEASE -DSK_DISABLE_TRACING -DSK_NO_GL -I$HERE/../napi-canvas/skia -I$PORTING/include -I$WASMCART_H_DIR"
-    SKIA_GL_CXX="-O2 -std=c++20 -fno-exceptions -fno-rtti -DSK_RELEASE -DSK_DISABLE_TRACING -I$HERE/../napi-canvas/skia -I$PORTING/include -I$WASMCART_H_DIR"
+    SKIA_CXX="-O2 -std=c++20 -fno-exceptions -fno-rtti -DSK_RELEASE -DSK_DISABLE_TRACING -DSK_NO_GL -I$HERE/../napi-canvas/skia -I$WASMCART_H_DIR"
+    SKIA_GL_CXX="-O2 -std=c++20 -fno-exceptions -fno-rtti -DSK_RELEASE -DSK_DISABLE_TRACING -I$HERE/../napi-canvas/skia -I$WASMCART_H_DIR"
     em++ $SKIA_CXX -c src/skia_wasm_fix.cpp -o obj/skia_wasm_fix.o
     em++ $SKIA_CXX -c src/skia_path_reset.cpp -o obj/skia_path_reset.o
     echo "=== Compiling Skia GL surface (Ganesh) ==="
@@ -120,11 +126,6 @@ if [ ! -f obj/libwebaudio.a ]; then
     bash build_webaudio_lib.sh
 fi
 
-# emstubs for Emscripten runtime stubs
-if [ -f "$PORTING/emstubs.c" ]; then
-    emcc -O2 -c "$PORTING/emstubs.c" -o obj/emstubs.o
-fi
-
 # ── Step 3: Link ─────────────────────────────────────────────────
 
 echo "=== Linking cart.wasm ==="
@@ -143,9 +144,6 @@ if [ -f obj/cutils.o ]; then
 fi
 if [ -f obj/dtoa.o ]; then
     OBJS="$OBJS obj/dtoa.o"
-fi
-if [ -f obj/emstubs.o ]; then
-    OBJS="$OBJS obj/emstubs.o"
 fi
 
 emcc -O2 \
