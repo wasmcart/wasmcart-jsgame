@@ -1006,25 +1006,44 @@ static JSValue js_get_gamepads(JSContext *ctx, JSValueConst this_val,
         JS_SetPropertyStr(ctx, pad, "mapping",
             JS_NewString(ctx, "standard"));
 
-        /* Buttons array — 16 standard gamepad buttons */
+        /* Buttons array — the W3C "standard" mapping, buttons[0..16].
+         *
+         * Seventeen slots, which is fewer than the pad ABI now carries: v4
+         * added MISC1, PADDLE1-4 and TOUCHPAD, and the standard mapping has
+         * nowhere to put them. They are DROPPED rather than crammed into
+         * spare indices, because a cart written against the Gamepad API
+         * expects buttons[n] to mean what the spec says it means, and a
+         * browser cannot report paddles either. A game that wants them should
+         * read the pad struct directly.
+         *
+         * buttons[16] is Guide/Home, which IS part of the standard mapping
+         * and was previously missing here. */
         JSValue buttons = JS_NewArray(ctx);
-        uint16_t btn = pads[i].buttons;
-        const uint16_t btn_masks[] = {
+        uint32_t btn = pads[i].buttons;
+        const uint32_t btn_masks[] = {
             WC_BTN_A, WC_BTN_B, WC_BTN_X, WC_BTN_Y,
             WC_BTN_L, WC_BTN_R, 0, 0,  /* L2/R2 handled by triggers */
             WC_BTN_SELECT, WC_BTN_START,
             WC_BTN_L3, WC_BTN_R3,
-            WC_BTN_UP, WC_BTN_DOWN, WC_BTN_LEFT, WC_BTN_RIGHT
+            WC_BTN_UP, WC_BTN_DOWN, WC_BTN_LEFT, WC_BTN_RIGHT,
+            WC_BTN_GUIDE
         };
-        for (int b = 0; b < 16; b++) {
+        for (int b = 0; b < 17; b++) {
             JSValue button = JS_NewObject(ctx);
             int pressed = (btn_masks[b] && (btn & btn_masks[b])) ? 1 : 0;
             /* Triggers for L2/R2 (indices 6,7) */
             double value = pressed ? 1.0 : 0.0;
-            if (b == 6) value = pads[i].left_trigger / 255.0;
-            if (b == 7) value = pads[i].right_trigger / 255.0;
-            if (b == 6) pressed = pads[i].left_trigger > 128;
-            if (b == 7) pressed = pads[i].right_trigger > 128;
+            /* Triggers are int16 0..32767 as of ABI v4 (SDL2's and
+             * libretro's own range), and the Gamepad API wants 0..1.
+             *
+             * The pressed threshold is deliberately LOW, not half travel: a
+             * trigger resting slightly off zero on an uncalibrated pad would
+             * otherwise sit near a halfway line and flicker, and Chrome
+             * reports pressed well before half travel too. */
+            if (b == 6) value = pads[i].left_trigger / 32767.0;
+            if (b == 7) value = pads[i].right_trigger / 32767.0;
+            if (b == 6) pressed = pads[i].left_trigger > WC_TRIGGER_PRESSED;
+            if (b == 7) pressed = pads[i].right_trigger > WC_TRIGGER_PRESSED;
 
             JS_SetPropertyStr(ctx, button, "pressed",
                 pressed ? JS_TRUE : JS_FALSE);
