@@ -13,6 +13,7 @@ All are permissive and compatible with MIT.
 | [QuickJS](https://bellard.org/quickjs/) | MIT | the JavaScript engine |
 | [Skia](https://skia.org) | BSD-3-Clause, &copy; Google | Canvas 2D via the Ganesh GL backend |
 | [webaudio-node](https://github.com/monteslu/webaudio-node) | ISC | Web Audio graph and audio decoders |
+| [Dawn](https://dawn.googlesource.com/dawn) emdawnwebgpu | BSD-3-Clause, &copy; The Dawn & Tint Authors | `cart-webgpu.wasm` only: the `webgpu.h` implementation behind `navigator.gpu`, and the source `tools/gen_webgpu_bindings.mjs` generates the binding from |
 
 BSD-3-Clause carries a binary-redistribution notice requirement, so a
 `.wasc` built from this repo should ship this file, or an equivalent notice,
@@ -20,8 +21,8 @@ alongside it.
 
 ## Example games
 
-The `hello_*` and `threejs` examples are original to this repository and MIT.
-`threejs` loads [Three.js](https://threejs.org) (MIT) as a game asset.
+The `hello_*`, `threejs` and `threejs_webgpu` examples are original to this repository and MIT.
+`threejs` and `threejs_webgpu` load [Three.js](https://threejs.org) (MIT) as a game asset.
 
 `space`, `space3d` and `adventure-ai` are built from game sources outside this
 repository and keep whatever terms those carry. They are not attached to

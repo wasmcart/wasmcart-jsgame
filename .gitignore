@@ -1,5 +1,6 @@
 # Build intermediates
 obj/
+obj-webgpu/
 
 # ASAN/debug cart builds -- 18MB artifacts from build-asan.sh, reproducible
 # in one command and useless to anyone else.

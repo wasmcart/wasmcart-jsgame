@@ -124,6 +124,13 @@ static void register_event_shims(JSContext *ctx);
 static void register_keyboard_mouse_api(JSContext *ctx);
 
 /* External: webgl_shim.c */
+/* JSGAME_WEBGPU builds the WebGPU runtime (build_webgpu.sh): navigator.gpu
+ * over Dawn's emdawnwebgpu instead of the WebGL2 shim and Skia/GL Canvas 2D,
+ * which need the GL imports a WebGPU cart does not have. */
+#ifdef JSGAME_WEBGPU
+extern void register_webgpu_api(JSContext *ctx);
+extern void webgpu_frame_begin(void);
+#endif
 extern void register_webgl_api(JSContext *ctx);
 /* External: canvas2d_skia.c (or canvas2d.c fallback) */
 extern void register_canvas2d_native(JSContext *ctx);
@@ -169,8 +176,12 @@ wc_info_t *wc_get_info(void) {
     info.audio_sample_rate = 0;
     info.pointer_ptr     = (uint32_t)(uintptr_t)pointers;
     info.keys_ptr        = (uint32_t)(uintptr_t)keys;
+#ifdef JSGAME_WEBGPU
+    info.gpu_api         = 2;  /* WebGPU (navigator.gpu); no WebGL, no Canvas 2D */
+#else
     info.gpu_api         = 1;  /* Always WebGL2. Canvas 2D content is uploaded as
                                 * a GL texture. Everything goes through the GPU. */
+#endif
     return &info;
 }
 
@@ -264,13 +275,18 @@ void wc_init(void) {
             JS_NewCFunction(ctx, js_set_webgl, "_wcSetWebGL", 1));
         JS_FreeValue(ctx, global);
     }
+#ifndef JSGAME_WEBGPU
     register_canvas2d_native(ctx);   /* Phase 3: native C2D rasterizer */
     register_webgl_api(ctx);         /* Phase 1b: WebGL2 shim */
+#endif
     register_audio_api(ctx);         /* Phase 2: Web Audio */
     register_localstorage_api(ctx);
     register_performance_api(ctx);
     register_event_shims(ctx);
     register_keyboard_mouse_api(ctx); /* Phase 4: keyboard/mouse events */
+#ifdef JSGAME_WEBGPU
+    register_webgpu_api(ctx);        /* navigator.gpu + getContext('webgpu') */
+#endif
 
     memset(prev_keys, 0, sizeof(prev_keys));
     memset(prev_pointer_buttons, 0, sizeof(prev_pointer_buttons));
@@ -483,6 +499,11 @@ void wc_render(void) {
      * overruns once is not penalised afterwards. */
     frame_deadline_ms = job_now_ms() + FRAME_WATCHDOG_MS;
 
+#ifdef JSGAME_WEBGPU
+    /* Settle WebGPU promises whose callbacks the host fired since the last
+     * frame; the microtask pump below runs their continuations. */
+    webgpu_frame_begin();
+#else
     /* Save the host's FBO before any Ganesh operations. */
     skia_save_host_fbo();
 
@@ -498,6 +519,7 @@ void wc_render(void) {
             gl_trace_stop();
         }
     }
+#endif
 
     /* Execute pending jobs (Promise microtasks).
      *
@@ -533,8 +555,10 @@ void wc_render(void) {
     /* Fire requestAnimationFrame callback */
     pump_raf();
 
+#ifndef JSGAME_WEBGPU
     /* Flush Skia surface → wasmcart framebuffer */
     skia_flush_to_framebuffer();
+#endif
 
     /* Pump audio output to ring buffer */
     pump_audio();
@@ -777,7 +801,9 @@ static JSValue js_set_resolution(JSContext *c, JSValueConst this_val,
         cur_height = h;
         info.width = w;
         info.height = h;
+#ifndef JSGAME_WEBGPU
         skia_resize_surface(w, h);
+#endif
     }
     return JS_UNDEFINED;
 }

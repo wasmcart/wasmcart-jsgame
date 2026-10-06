@@ -117,6 +117,36 @@ cp node_modules/three/build/three.module.js my_game/three.js
 bash pack_game.sh my_game/ my_game.wasc "My 3D Game"
 ```
 
+## WebGPU: three.js WebGPURenderer
+
+A second runtime, `build/cart-webgpu.wasm`, gives games `navigator.gpu` and
+`canvas.getContext('webgpu')` instead of WebGL2, so three.js's
+`WebGPURenderer` (and TSL) runs unmodified. It is a WebGPU cart
+(`gpu_api` 2): it needs a host that runs WebGPU carts, and has no WebGL and
+no Canvas 2D (`getContext('2d')` returns null; both of those go through GL).
+
+```js
+import * as THREE from './three.webgpu.js';   // + three.core.js beside it
+const canvas = document.getElementById('canvas');
+const renderer = new THREE.WebGPURenderer({ canvas });
+await renderer.init();
+```
+
+```bash
+CART_WASM=build/cart-webgpu.wasm bash pack_game.sh my_game/ my_game.wasc "My WebGPU Game"
+```
+
+See [`examples/threejs_webgpu/`](examples/threejs_webgpu). Its frames match
+three.js rendering the same scene directly on the host's WebGPU byte for byte.
+
+How it works: `navigator.gpu` is C over Dawn's `webgpu.h` (the emdawnwebgpu
+port, linked into the cart; the host supplies its JavaScript half and the
+device). Most of it is generated from the pinned emdawnwebgpu release by
+`tools/gen_webgpu_bindings.mjs` into `src/webgpu_bindings.gen.c`; Promises,
+buffer mapping, raw-data uploads and the canvas context are in
+`src/webgpu_shim.c`. A Promise settles at the start of the frame after its
+result arrives, so `await buffer.mapAsync()` takes at least one frame.
+
 ## Examples
 
 | Example | Type | Description |
@@ -125,6 +155,7 @@ bash pack_game.sh my_game/ my_game.wasc "My 3D Game"
 | [`examples/hello_audio/`](examples/hello_audio) | Web Audio | Oscillator tones |
 | [`examples/hello_fetch/`](examples/hello_fetch) | fetch/modules | Asset loading, ES imports |
 | [`examples/hello_webgl/`](examples/hello_webgl) | WebGL2 | Raw GL triangle |
+| [`examples/threejs_webgpu/`](examples/threejs_webgpu) | WebGPU | three.js `WebGPURenderer`: a lit cube turning (needs a WebGPU host) |
 | [`examples/threejs/`](examples/threejs) | WebGL2 + Audio | Three.js 3D scene — PBR materials, textures, lights, gamepad camera orbit, sound effects |
 
 The `hello_*` examples include ready-to-run `.wasc` files. The Three.js demo includes source + `.wasc`.
@@ -218,6 +249,20 @@ Only needed if you're modifying the runtime itself. Game developers just use the
 ```bash
 bash build.sh          # → build/cart.wasm (~5MB)
 ```
+
+The WebGPU runtime needs the emsdk and QuickJS above plus the emdawnwebgpu
+package the host's WebGPU glue was generated from (the wasmcart repo pins it
+in `scripts/wgpu/emdawnwebgpu.json`); no Skia:
+
+```bash
+EMDAWNWEBGPU_PKG=/path/to/emdawnwebgpu_pkg bash build_webgpu.sh   # → build/cart-webgpu.wasm (~1.5MB)
+CART_WASM=build/cart-webgpu.wasm bash pack_game.sh examples/threejs_webgpu \
+  examples/threejs_webgpu/threejs_webgpu.wasc "three.js WebGPU"
+WASMCART_REPO=/path/to/wasmcart node test/webgpu.mjs              # host with WebGPU carts
+```
+
+All build scripts find their sibling checkouts under `CLIEMU_ROOT` (default:
+this repo's parent), so a git worktree elsewhere can set it.
 
 **Editing the Skia wrapper?** `wasmcart-skia/out/include/skia_c.{cpp,hpp}` are
 build *outputs*, copied from `napi-canvas/skia-c/`. Editing them does nothing.
