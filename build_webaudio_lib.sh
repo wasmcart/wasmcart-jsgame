@@ -7,12 +7,16 @@
 
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
+# Sibling checkouts (emsdk, wasmcart, webaudio-node, wasmcart-skia,
+# napi-canvas) are found under CLIEMU_ROOT, default this repo's parent.
+# Set it when building from a git worktree that lives elsewhere.
+CLIEMU_ROOT="${CLIEMU_ROOT:-$HERE/..}"
 cd "$HERE"
 
-EMSDK_ROOT="$(cd ../emsdk && pwd)"
+EMSDK_ROOT="$(cd "$CLIEMU_ROOT/emsdk" && pwd)"
 source "$EMSDK_ROOT/emsdk_env.sh" 2>/dev/null || true
 
-WA_SRC="$HERE/../webaudio-node/src/wasm"
+WA_SRC="$CLIEMU_ROOT/webaudio-node/src/wasm"
 
 if [ ! -f "$WA_SRC/audio_graph_simple.cpp" ]; then
     echo "ERROR: webaudio-node sources not found at $WA_SRC"

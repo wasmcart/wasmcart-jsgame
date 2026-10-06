@@ -11,11 +11,15 @@
 
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
+# Sibling checkouts (emsdk, wasmcart, webaudio-node, wasmcart-skia,
+# napi-canvas) are found under CLIEMU_ROOT, default this repo's parent.
+# Set it when building from a git worktree that lives elsewhere.
+CLIEMU_ROOT="${CLIEMU_ROOT:-$HERE/..}"
 cd "$HERE"
 
 # ── Paths ────────────────────────────────────────────────────────
 
-EMSDK_ROOT="$(cd ../emsdk && pwd)"
+EMSDK_ROOT="$(cd "$CLIEMU_ROOT/emsdk" && pwd)"
 source "$EMSDK_ROOT/emsdk_env.sh" 2>/dev/null || true
 
 # QuickJS lives in the repo, NOT /tmp: /tmp wipes on reboot and took the whole
@@ -24,7 +28,7 @@ QUICKJS_SRC="${QUICKJS_SRC:-$HERE/vendor/quickjs}"
 # The ABI header comes from a wasmcart checkout's include/ (WASMCART_REPO
 # overrides; default sibling). It used to be read out of wasmcart-examples'
 # hello cart -- a copy of a copy that happened to be current.
-WASMCART_REPO="${WASMCART_REPO:-$HERE/../wasmcart}"
+WASMCART_REPO="${WASMCART_REPO:-$CLIEMU_ROOT/wasmcart}"
 WASMCART_H="$WASMCART_REPO/include/wasmcart.h"
 if [ ! -f "$WASMCART_H" ]; then
     echo "wasmcart ABI header not found at $WASMCART_H (set WASMCART_REPO)"
@@ -78,7 +82,7 @@ echo "  QuickJS compiled"
 # also makes the wasm byte-identical across machines.
 CART_CFLAGS="-O2 -I$QUICKJS_SRC -I$(dirname $WASMCART_H) \
   -ffile-prefix-map=$QUICKJS_SRC=quickjs \
-  -ffile-prefix-map=$HERE/../webaudio-node=webaudio-node \
+  -ffile-prefix-map=$CLIEMU_ROOT/webaudio-node=webaudio-node \
   -ffile-prefix-map=$HERE=."
 
 echo "=== Compiling cart main ==="
@@ -87,15 +91,15 @@ emcc $CART_CFLAGS -c src/cart_main.c -o obj/cart_main.o
 echo "=== Compiling WebGL shim (Phase 1b) ==="
 emcc $CART_CFLAGS -c src/webgl_shim.c -o obj/webgl_shim.o
 
-SKIA_DIR="$HERE/../wasmcart-skia/out"
+SKIA_DIR="$CLIEMU_ROOT/wasmcart-skia/out"
 
 echo "=== Compiling Canvas 2D (Skia-backed, Phase 3) ==="
 if [ -f "$SKIA_DIR/libskia.a" ]; then
-    SKIA_CFLAGS="$CART_CFLAGS -I$SKIA_DIR/include -I$HERE/../napi-canvas/skia"
+    SKIA_CFLAGS="$CART_CFLAGS -I$SKIA_DIR/include -I$CLIEMU_ROOT/napi-canvas/skia"
     emcc $SKIA_CFLAGS -c src/canvas2d_skia.c -o obj/canvas2d.o
     WASMCART_H_DIR="$(dirname $WASMCART_H)"
-    SKIA_CXX="-O2 -std=c++20 -fno-exceptions -fno-rtti -DSK_RELEASE -DSK_DISABLE_TRACING -DSK_NO_GL -I$HERE/../napi-canvas/skia -I$WASMCART_H_DIR"
-    SKIA_GL_CXX="-O2 -std=c++20 -fno-exceptions -fno-rtti -DSK_RELEASE -DSK_DISABLE_TRACING -I$HERE/../napi-canvas/skia -I$WASMCART_H_DIR"
+    SKIA_CXX="-O2 -std=c++20 -fno-exceptions -fno-rtti -DSK_RELEASE -DSK_DISABLE_TRACING -DSK_NO_GL -I$CLIEMU_ROOT/napi-canvas/skia -I$WASMCART_H_DIR"
+    SKIA_GL_CXX="-O2 -std=c++20 -fno-exceptions -fno-rtti -DSK_RELEASE -DSK_DISABLE_TRACING -I$CLIEMU_ROOT/napi-canvas/skia -I$WASMCART_H_DIR"
     em++ $SKIA_CXX -c src/skia_wasm_fix.cpp -o obj/skia_wasm_fix.o
     em++ $SKIA_CXX -c src/skia_path_reset.cpp -o obj/skia_path_reset.o
     echo "=== Compiling Skia GL surface (Ganesh) ==="

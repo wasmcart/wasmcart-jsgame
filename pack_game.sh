@@ -10,12 +10,16 @@
 
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
+# Sibling checkouts (emsdk, wasmcart, webaudio-node, wasmcart-skia,
+# napi-canvas) are found under CLIEMU_ROOT, default this repo's parent.
+# Set it when building from a git worktree that lives elsewhere.
+CLIEMU_ROOT="${CLIEMU_ROOT:-$HERE/..}"
 
 GAME_DIR="${1:?Usage: pack_game.sh <game_dir> <output.wasc> [name]}"
 OUTPUT="${2:?Usage: pack_game.sh <game_dir> <output.wasc> [name]}"
 NAME="${3:-JS Game}"
 
-CART_WASM="$HERE/build/cart.wasm"
+CART_WASM="${CART_WASM:-$HERE/build/cart.wasm}"   # build/cart-webgpu.wasm for a WebGPU game
 
 if [ ! -f "$CART_WASM" ]; then
     echo "ERROR: cart.wasm not found. Run build.sh first."
@@ -45,7 +49,7 @@ fi
 echo "Game assets: $(find "$TMPDIR" -type f | wc -l) files"
 
 # Pack
-node "$HERE/../wasmcart/bin/wasmcart-pack.js" \
+node "$CLIEMU_ROOT/wasmcart/bin/wasmcart-pack.js" \
     --wasm "$CART_WASM" \
     --assets "$TMPDIR/" \
     --name "$NAME" \
