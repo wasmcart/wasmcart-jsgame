@@ -48,9 +48,22 @@ fi
 
 echo "Game assets: $(find "$TMPDIR" -type f | wc -l) files"
 
+# The cart's version is the GAME's: CART_VERSION if set, else the "version"
+# in the game's package.json, else (wasmcart-pack 0.40.0 or later) the game
+# directory's git checkout: the tag at a clean v<semver> tag, else
+# <last tag>-dev.g<commit>. Never this SDK's version. Not semver = no cart.
+VERSION_ARGS=(--version-from "$GAME_DIR")
+if [ -n "${CART_VERSION:-}" ]; then
+    VERSION_ARGS=(--version "$CART_VERSION")
+elif [ -f "$GAME_DIR/package.json" ]; then
+    PKG_VERSION="$(node -e "process.stdout.write(String(JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8')).version ?? ''))" "$GAME_DIR/package.json")"
+    [ -n "$PKG_VERSION" ] && VERSION_ARGS=(--version "$PKG_VERSION")
+fi
+
 # Pack
 node "$CLIEMU_ROOT/wasmcart/bin/wasmcart-pack.js" \
     --wasm "$CART_WASM" \
     --assets "$TMPDIR/" \
     --name "$NAME" \
+    "${VERSION_ARGS[@]}" \
     -o "$OUTPUT"

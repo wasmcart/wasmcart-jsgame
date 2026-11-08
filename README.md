@@ -36,6 +36,11 @@ requestAnimationFrame(gameLoop);
 bash pack_game.sh my_game/ my_game.wasc "My Game"
 ```
 
+The cart's version is your game's: the `version` in its `package.json` if it
+has one, else its git checkout's (at a clean `v1.2.0` tag `1.2.0`, anywhere
+else `1.2.0-dev.g<commit>`; wasmcart 0.40.0 or later). `CART_VERSION=1.2.0`
+sets it by hand.
+
 ### 3. Run it
 
 These are GL carts, so they need a GL-capable host:
