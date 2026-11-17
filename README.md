@@ -10,10 +10,13 @@ Runs on every [wasmcart](https://github.com/wasmcart/wasmcart) host: Node.js (SD
 
 ## Quick start
 
-**Just want to play something?** The examples ship as ready-to-run carts.
-Play one straight from GitHub:
+**Just want to play something?** Prebuilt carts are attached to the
+[latest release](https://github.com/wasmcart/wasmcart-jsgame/releases/latest):
+a space shooter, 3D space combat, an adventure and the three.js demos. Download one
+and run it, or play an example straight from GitHub:
 
 ```bash
+npx wasmcart space.wasc
 npx wasmcart https://raw.githubusercontent.com/wasmcart/wasmcart-jsgame/main/examples/threejs/threejs.wasc
 ```
 
