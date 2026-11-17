@@ -60,8 +60,11 @@ elif [ -f "$GAME_DIR/package.json" ]; then
     [ -n "$PKG_VERSION" ] && VERSION_ARGS=(--version "$PKG_VERSION")
 fi
 
-# Pack
-node "$CLIEMU_ROOT/wasmcart/bin/wasmcart-pack.js" \
+# Pack with a sibling wasmcart checkout when there is one, else the
+# published packer from npm (a fresh clone of this repo alone).
+PACK=(npx -y wasmcart pack)
+[ -f "$CLIEMU_ROOT/wasmcart/bin/wasmcart-pack.js" ] && PACK=(node "$CLIEMU_ROOT/wasmcart/bin/wasmcart-pack.js")
+"${PACK[@]}" \
     --wasm "$CART_WASM" \
     --assets "$TMPDIR/" \
     --name "$NAME" \

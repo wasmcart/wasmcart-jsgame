@@ -8,6 +8,30 @@ Runs on every [wasmcart](https://github.com/wasmcart/wasmcart) host: Node.js (SD
 
 **More secure than a browser.** Games run inside [QuickJS](https://bellard.org/quickjs/) inside WASM — no DOM access, no XSS, no arbitrary network, no filesystem. You can safely run untrusted JavaScript games the way you'd run a SNES ROM.
 
+## Quick start
+
+**Just want to play something?** The examples ship as ready-to-run carts.
+Play one straight from GitHub:
+
+```bash
+npx wasmcart https://raw.githubusercontent.com/wasmcart/wasmcart-jsgame/main/examples/threejs/threejs.wasc
+```
+
+To write your own:
+
+```bash
+git clone https://github.com/wasmcart/wasmcart-jsgame
+cp -r wasmcart-jsgame/examples/hello_canvas my-game
+bash wasmcart-jsgame/pack_game.sh my-game my-game.wasc "My Game"
+npx wasmcart my-game.wasc       # opens a window
+```
+
+Edit `my-game/main.js`, then rerun the last two lines. No compiler, no
+toolchain: `pack_game.sh` zips your JS with the prebuilt engine
+(`build/cart.wasm`, in the clone) into one `.wasc`, which is already the
+shippable file. It needs Node.js; the packer comes from
+[`npx wasmcart`](https://www.npmjs.com/package/wasmcart).
+
 ## Make a Game
 
 You don't need to build anything. Grab the pre-built `build/cart.wasm`, write your game, pack it.
